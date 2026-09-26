@@ -525,12 +525,36 @@ family and are unrelated to the above.
 ## Operational Constraints
 
 `TTPlatform` rejects or adjusts unsupported feature combinations early, giving a
-clear error before anything reaches the device:
+clear error before anything reaches the device. Every refusal names the CLI flag
+you passed and prints the offending value; none of them uses `assert`, so they
+survive `python -O`.
 
 - Tensor parallel and pipeline parallel execution are provided by the models
-  internal implementation, not exposed at the vLLM level.
-- Speculative decoding is not currently supported.
-- LoRA is not currently supported.
+  internal implementation, not exposed at the vLLM level. `--tensor-parallel-size`
+  and `--pipeline-parallel-size` above 1 are refused.
+- Decode context parallel (`--decode-context-parallel-size`) and prefill context
+  parallel (`--prefill-context-parallel-size`) are refused.
+- Speculative decoding is not currently supported; `--speculative-config` and
+  `--speculative-model` are refused. The contract types and the host accept walk
+  are merged, but the model drafter that produces candidates is not wired into
+  the runner yet.
+- LoRA is not currently supported; `--enable-lora`, `--lora-modules` and the
+  other `--lora-*` options are refused.
+- Weight quantization is refused. Serve the model in its own dtype: quantized
+  weights need a tt-metal generator that loads them, and no released generator
+  does. `--quantization` and `quant_config.quant_method` are both rejected.
+- `--kv-cache-dtype` is limited to `auto`, `bfloat16` and `float16`. The fp8,
+  turboquant, per-token-head and nvfp4 encodings are refused.
+- P/D disaggregation and KV transfer are refused (`--kv-transfer-config`).
+- Expert parallelism (`--enable-expert-parallel`) and expert-parallel load
+  balancing (`--enable-eplb`, `--eplb-config`) are refused.
+- Routed-expert reporting (`--enable-return-routed-experts`) is refused.
+- Only the generate model runner is served. `--runner pooling` and
+  `--runner draft` are refused.
+- Sleep mode needs no plugin refusal: vLLM itself rejects `--enable-sleep-mode`
+  on any platform that is not CUDA, ROCm or XPU.
+- `n > 1` works. vLLM fans a multi-completion request out into independent
+  single-sample child requests, so the plugin never sees `n != 1`.
 - Chunked prefill is gated on the model's declared capability, not on a
   `model_type` allowlist. vLLM enables it by default; pass
   `--no-enable-chunked-prefill` to opt out. When it stays on,
@@ -543,14 +567,28 @@ clear error before anything reaches the device:
   generator corrects them itself.
 - Where chunked prefill is active, multimodal inputs are never split across a
   chunk boundary.
-- Prompt logprobs are rejected at request validation time.
+- Prompt logprobs are rejected at request validation time. The tt-metal
+  generator returns logits for the final prompt position only, so serving this
+  needs a paired tt-metal change.
 - Prefix caching is enabled only for models that declare TT support for it.
 - Async decode overlap is enabled only for models that declare the capability.
 - Multi-host MPI data parallelism is not supported.
+- Per-request `thinking_token_budget`, `repetition_detection` and `extra_args`
+  are refused on models that commit one token per step; the TT backend has no
+  path for them and previously dropped them silently.
 - vLLM's V2 model runner. The plugin implements only the V1 model-runner
   contract and pins `VLLM_USE_V2_MODEL_RUNNER=0`; setting it to `1` is refused.
 
-These are TT runtime characteristics, not vLLM plugin API limitations.
+Most of the above are upstream features the TT backend does not serve; they are
+refused at config time, with the offending value and the flag you passed named
+in the error. The rest are TT runtime characteristics.
+
+Two consequences worth stating plainly. A launch that used to "work" by
+accident — a quantized model, an fp8 KV cache, a LoRA adapter — now fails at
+startup with the reason, rather than returning output that does not match what
+was asked for. And `extra_args` is a catch-all for custom sampling
+implementations, so a client using it for a plugin that is not this one will be
+told to unset it.
 
 ## Benchmarking
 
