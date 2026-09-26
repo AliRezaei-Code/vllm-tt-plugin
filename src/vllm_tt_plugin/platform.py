@@ -29,6 +29,17 @@ from vllm_tt_plugin.config import (
     uses_tt_lane_coordinator,
     validate_tt_lane_config,
 )
+from vllm_tt_plugin.feature_support import (
+    raise_for_unsupported_params,
+    unsupported_block_output_params,
+    unsupported_request_params,
+)
+from vllm_tt_plugin.feature_support import (
+    validate_all as validate_tt_feature_support,
+)
+from vllm_tt_plugin.feature_support import (
+    verify_quantization as verify_tt_quantization,
+)
 from vllm_tt_plugin.logger import init_tt_logger
 from vllm_tt_plugin.utils.dp_discovery import (
     StandardDPAssignmentT,
@@ -1405,6 +1416,30 @@ class TTPlatform(Platform):
         pass
 
     @classmethod
+    def verify_quantization(cls, quant: str) -> None:
+        # Replaces the base check, which only fires when
+        # `supported_quantization` is non-empty and whose message names neither
+        # the flag nor the supported set. The base list holds quantization
+        # METHOD names, not dtypes, so the honest TT answer is "none of them".
+        # Called by ModelConfig._verify_quantization during VllmConfig
+        # construction, i.e. before check_and_update_config runs.
+        verify_tt_quantization(cls, quant)
+
+    @classmethod
+    def get_punica_wrapper(cls) -> str:
+        # Upstream resolves the punica wrapper through this and raises a bare
+        # NotImplementedError with no message. Reachable only if a LoRA config
+        # slips past validate_lora, so name the reason rather than leaving an
+        # anonymous failure in a dependency's construction path.
+        raise NotImplementedError(
+            "LoRA is not supported by the TT backend: there is no punica "
+            "wrapper to attach adapters to, because TT model code is a "
+            "tt-metal generator rather than a stack of vLLM layers. "
+            "validate_lora refuses a configured --enable-lora at config time; "
+            "reaching this means that refusal was bypassed."
+        )
+
+    @classmethod
     def is_async_output_supported(cls, enforce_eager: bool | None) -> bool:
         return True
 
@@ -1558,14 +1593,11 @@ class TTPlatform(Platform):
 
     @classmethod
     def _apply_check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
-        assert not vllm_config.speculative_config, (
-            "Speculative decoding is not yet supported for TT backend"
-        )
-        assert (
-            vllm_config.parallel_config.tensor_parallel_size == 1
-            and vllm_config.parallel_config.pipeline_parallel_size == 1
-        ), "TT backend does not support distributed execution"
-        assert not vllm_config.lora_config, "LoRA is not supported for TT backend"
+        # One loud refusal per upstream feature the TT backend does not serve,
+        # in a fixed order, replacing three `assert` refusals. `assert` is not
+        # usable here: `python -O` strips it, and a refusal that disappears
+        # under -O is not a refusal (AGENTS.md 2.4). See feature_support.py.
+        validate_tt_feature_support(cls, vllm_config)
 
         # Device computes top-32 logprobs but the OpenAI API limits to 20
         MAX_TOP_K = 20
@@ -2177,58 +2209,60 @@ class TTPlatform(Platform):
             raise ValueError(f"prompt_embeds are not supported on {dev}")
 
         if isinstance(params, SamplingParams) and params.prompt_logprobs is not None:
-            raise ValueError(f"Not yet supporting prompt_logprobs on {dev}")
+            # Not a plugin-side gap. The tt-metal generator's prefill returns
+            # one position per request (generator.py: `torch.zeros(batch_size,
+            # 1, vocab_size)`), because autoregressive sampling only needs the
+            # final prompt position. prompt_logprobs needs logits at *every*
+            # prompt position, so it requires a paired tt-metal change before
+            # the runner can stop hard-coding prompt_logprobs_dict to None
+            # (model_runner.py:1950, 2477-2489). Per AGENTS.md section 6 the
+            # plugin half and the tt-metal half land together.
+            raise ValueError(
+                f"prompt_logprobs is not supported on {dev}: the tt-metal "
+                f"generator returns logits for the final prompt position only, "
+                f"and prompt_logprobs needs every prompt position. This needs a "
+                f"tt-metal generator change before the plugin can serve it."
+            )
 
         block_contract = cls._get_block_output_contract()
-        if not isinstance(params, SamplingParams) or block_contract is None:
+        if not isinstance(params, SamplingParams):
             return
 
-        output_size, max_model_len = block_contract
-        prompt_len = length_from_prompt_token_ids_or_embeds(
-            processed_inputs.get("prompt_token_ids"),
-            processed_inputs.get("prompt_embeds"),
-        )
-        cls._resolve_block_output_max_tokens(
-            prompt_len,
-            params.max_tokens,
-            output_size,
-            max_model_len,
-        )
-
-        # Reject unsupported response-contract controls. Model-owned sampling
-        # controls (temperature etc.) are instead accepted and neutralized on
-        # the per-request clone in _install_block_output_input_processor_patch.
-        unsupported = []
-        if params.n != 1:
-            unsupported.append(f"n={params.n!r} (accepted: 1)")
-        if params.logprobs is not None:
-            unsupported.append(f"logprobs={params.logprobs!r} (accepted: None)")
-        if params.logprob_token_ids is not None:
-            unsupported.append("logprob_token_ids (accepted: omitted/None)")
-        if params.flat_logprobs:
-            unsupported.append("flat_logprobs=True (accepted: False)")
-        if params.bad_words:
-            unsupported.append("bad_words (accepted: omitted/empty)")
-        if params.structured_outputs is not None:
-            unsupported.append("structured_outputs (accepted: omitted/None)")
-        if params.logit_bias is not None:
-            unsupported.append("logit_bias (accepted: omitted/None)")
-        if params.allowed_token_ids is not None:
-            unsupported.append("allowed_token_ids (accepted: omitted/None)")
-        if params.min_tokens != 0:
-            unsupported.append(f"min_tokens={params.min_tokens!r} (accepted: 0)")
-        if params.thinking_token_budget is not None:
-            unsupported.append("thinking_token_budget (accepted: omitted/None)")
-        if params.repetition_detection is not None:
-            unsupported.append("repetition_detection (accepted: omitted/None)")
-        if params.extra_args:
-            unsupported.append("extra_args (accepted: omitted/empty)")
-
-        if unsupported:
-            raise ValueError(
-                "This block-output model owns its Gumbel sampling and does not "
-                "support these request parameters: " + "; ".join(unsupported)
+        if block_contract is not None:
+            output_size, max_model_len = block_contract
+            prompt_len = length_from_prompt_token_ids_or_embeds(
+                processed_inputs.get("prompt_token_ids"),
+                processed_inputs.get("prompt_embeds"),
             )
+            cls._resolve_block_output_max_tokens(
+                prompt_len,
+                params.max_tokens,
+                output_size,
+                max_model_len,
+            )
+
+            # Reject unsupported response-contract controls. Model-owned
+            # sampling controls (temperature etc.) are instead accepted and
+            # neutralized on the per-request clone in
+            # _install_block_output_input_processor_patch.
+            raise_for_unsupported_params(
+                unsupported_block_output_params(params),
+                "This block-output model owns its Gumbel sampling",
+                dev,
+            )
+            return
+
+        # Token-at-a-time models route logprobs, bad_words, structured outputs,
+        # logit_bias, allowed_token_ids and min_tokens to host sampling via
+        # compat_sampling_required, so those are honoured rather than refused.
+        # The four below have no path at any output width and were previously
+        # dropped in silence, so a client asking for them got output that did
+        # not match its request.
+        raise_for_unsupported_params(
+            unsupported_request_params(params),
+            "The TT backend has no path for these request controls",
+            dev,
+        )
 
     @staticmethod
     def compat_sampling_required(sampling_params, num_devices) -> bool:

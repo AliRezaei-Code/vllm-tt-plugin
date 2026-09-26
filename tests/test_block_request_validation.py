@@ -237,6 +237,8 @@ def _config(
             generation_config="auto",
             logits_processors=None,
             get_sliding_window=lambda: None,
+            runner="auto",
+            enable_return_routed_experts=False,
         ),
         scheduler_config=SimpleNamespace(
             max_num_seqs=max_num_seqs,
@@ -247,18 +249,24 @@ def _config(
             scheduler_cls=None,
             verify_max_model_len=lambda _max_model_len: None,
         ),
-        cache_config=SimpleNamespace(enable_prefix_caching=False),
+        cache_config=SimpleNamespace(enable_prefix_caching=False, cache_dtype="auto"),
         structured_outputs_config=SimpleNamespace(disable_any_whitespace=False),
         parallel_config=SimpleNamespace(
             tensor_parallel_size=1,
             pipeline_parallel_size=1,
             data_parallel_size=data_parallel_size,
             worker_cls="auto",
+            enable_expert_parallel=False,
+            enable_eplb=False,
+            decode_context_parallel_size=1,
+            prefill_context_parallel_size=1,
             distributed_executor_backend=distributed_executor_backend,
         ),
         diffusion_config=None,
         speculative_config=None,
         lora_config=None,
+        kv_transfer_config=None,
+        ec_transfer_config=None,
     )
 
 

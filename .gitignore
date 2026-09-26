@@ -38,3 +38,11 @@ vllm_cache/
 *.tensorbin
 tracy/
 profiler/
+
+# Nested upstream vLLM checkout used for gap analysis against the pinned
+# baseline. Read-only reference tree; never edited, never committed.
+/third_party/
+
+# Deep-research artifacts: source ledger and report are working notes, not
+# repository documentation. See AGENTS.md section 2 rule 6.
+.deep-research/

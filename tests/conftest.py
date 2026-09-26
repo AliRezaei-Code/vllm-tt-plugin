@@ -104,6 +104,13 @@ def vllm_config() -> SimpleNamespace:
             world_size=1,
             local_world_size=1,
             assigned_physical_gpu_ids=None,
+            # Mirrors ParallelConfig fields feature_support.py reads. Seeded
+            # with vLLM's own defaults so a refusal test proves the plugin
+            # refuses, not that the field happens to be absent.
+            enable_expert_parallel=False,
+            enable_eplb=False,
+            decode_context_parallel_size=1,
+            prefill_context_parallel_size=1,
             worker_cls="auto",
             data_parallel_backend="mp",
             nnodes=1,
@@ -120,6 +127,8 @@ def vllm_config() -> SimpleNamespace:
             original_max_model_len=None,
             is_moe=False,
             get_sliding_window=lambda: None,
+            runner="auto",
+            enable_return_routed_experts=False,
         ),
         scheduler_config=SimpleNamespace(
             enable_chunked_prefill=False,
@@ -131,6 +140,8 @@ def vllm_config() -> SimpleNamespace:
         ),
         speculative_config=None,
         lora_config=None,
-        cache_config=SimpleNamespace(enable_prefix_caching=False),
+        cache_config=SimpleNamespace(enable_prefix_caching=False, cache_dtype="auto"),
         structured_outputs_config=SimpleNamespace(disable_any_whitespace=False),
+        kv_transfer_config=None,
+        ec_transfer_config=None,
     )
