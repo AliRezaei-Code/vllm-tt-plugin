@@ -9,6 +9,7 @@ from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
 import ttnn
+from torch import nn
 from vllm.config import VllmConfig
 from vllm.model_executor.model_loader import get_model_architecture
 from vllm.tasks import SupportedTask
@@ -279,6 +280,57 @@ class TTWorker(WorkerBase):
 
     def get_supported_tasks(self) -> tuple[SupportedTask, ...]:
         return self.model_runner.get_supported_tasks()
+
+    def get_model(self) -> nn.Module:
+        """Return the loaded TT model.
+
+        ``WorkerBase.get_model`` raises ``NotImplementedError``, which also
+        breaks the two members built on it: ``get_model_inspection`` (called
+        unconditionally by ``entrypoints/llm.py`` via
+        ``collective_rpc("get_model_inspection")``) and ``apply_model`` (called
+        by ``entrypoints/llm.py:603``). Both are live paths, so the base
+        refusal is not a theoretical gap.
+
+        The object is the tt-metal generator the loader produced, not a stack of
+        vLLM layers; ``format_model_inspection`` walks it structurally, which
+        works for any ``nn.Module``.
+        """
+        model = getattr(self.model_runner, "model", None)
+        if model is None:
+            raise RuntimeError(
+                "TTWorker.get_model() was called before the model finished "
+                "loading. Upstream reaches it through get_model_inspection and "
+                "apply_model, both of which run after load_model."
+            )
+        return model
+
+    def add_lora(self, lora_request) -> bool:
+        raise NotImplementedError(
+            f"LoRA is not supported by the TT backend: cannot add adapter "
+            f"{getattr(lora_request, 'lora_int_id', lora_request)!r}. The TT "
+            f"model code is a tt-metal generator rather than a stack of vLLM "
+            f"layers, so there is no punica wrapper to attach an adapter to. "
+            f"validate_lora refuses a configured --enable-lora at config time; "
+            f"reaching this means a runtime LoRA update bypassed that refusal."
+        )
+
+    def remove_lora(self, lora_id: int) -> bool:
+        raise NotImplementedError(
+            f"LoRA is not supported by the TT backend: cannot remove adapter "
+            f"lora_id={lora_id!r}. See add_lora for the full reason."
+        )
+
+    def pin_lora(self, lora_id: int) -> bool:
+        raise NotImplementedError(
+            f"LoRA is not supported by the TT backend: cannot pin adapter "
+            f"lora_id={lora_id!r}. See add_lora for the full reason."
+        )
+
+    def list_loras(self) -> set[int]:
+        raise NotImplementedError(
+            "LoRA is not supported by the TT backend, so no adapter is ever "
+            "loaded and none can be listed. See add_lora for the full reason."
+        )
 
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
         """
