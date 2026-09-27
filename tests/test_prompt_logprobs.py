@@ -22,9 +22,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 import torch
+from vllm.sampling_params import SamplingParams
+from vllm.v1.worker.gpu_input_batch import CachedRequestState
 
 from vllm_tt_plugin.input_batch import (
     PROMPT_LOGPROBS_NONE_SENTINEL,
+    InputBatch,
     SamplingInputBatch,
 )
 from vllm_tt_plugin.logprobs import (
@@ -501,3 +504,74 @@ def test_chunked_prefill_output_consults_the_prompt_logprob_seam():
     )
 
     assert calls == [["c"]]
+
+
+# --------------------------------------------------------------------------
+# Slot lifecycle: the setting must follow the row, not the index
+# --------------------------------------------------------------------------
+
+
+def _real_batch() -> InputBatch:
+    return InputBatch(
+        max_num_reqs=4,
+        max_model_len=32,
+        max_num_batched_tokens=32,
+        vocab_size=64,
+        block_sizes=[16],
+        kernel_block_sizes=[16],
+    )
+
+
+def _request(req_id: str, prompt_logprobs) -> CachedRequestState:
+    return CachedRequestState(
+        req_id=req_id,
+        prompt_token_ids=[1, 2, 3, 4],
+        mm_features=None,
+        sampling_params=SamplingParams(
+            temperature=0.0, prompt_logprobs=prompt_logprobs
+        ),
+        generator=None,
+        block_ids=([0],),
+        num_computed_tokens=0,
+        output_token_ids=[],
+    )
+
+
+def test_condense_moves_the_setting_with_the_row_not_the_index():
+    # condense slides the last live row down into each vacated index. The
+    # prompt-logprob request has to travel with that row; if it stayed put, the
+    # next request to land in the reused slot would inherit it and emit prompt
+    # logprobs nobody asked for.
+    batch = _real_batch()
+    batch.add_request(_request("a", 3))  # row 0
+    batch.add_request(_request("b", 1))  # row 1
+
+    freed = batch.remove_request("a")  # row 0 is now empty
+    assert freed == 0
+    batch.condense([0])
+
+    # "b" moved from row 1 to row 0 and kept its own setting.
+    assert batch.req_id_to_index["b"] == 0
+    assert batch.requested_prompt_logprobs(0) == 1
+
+    # A new request in the reused slot must read as not-requested.
+    batch.add_request(_request("c", None))
+    assert batch.req_id_to_index["c"] == 1
+    assert batch.requested_prompt_logprobs(1) == PROMPT_LOGPROBS_NONE_SENTINEL
+    assert batch.requested_prompt_logprobs(0) == 1
+    assert batch.prompt_logprobs_requested is True
+
+
+def test_removed_slot_does_not_leak_into_a_request_that_reuses_it():
+    # The complementary case: removal clears the slot, and condense is not
+    # needed for the setting to be correct when the batch is not compacted.
+    batch = _real_batch()
+    batch.add_request(_request("a", 2))
+    assert batch.requested_prompt_logprobs(0) == 2
+
+    batch.remove_request("a")
+    batch.add_request(_request("d", None))
+
+    assert batch.req_id_to_index["d"] == 0
+    assert batch.requested_prompt_logprobs(0) == PROMPT_LOGPROBS_NONE_SENTINEL
+    assert batch.prompt_logprobs_requested is False

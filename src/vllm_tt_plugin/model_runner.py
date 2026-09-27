@@ -2487,6 +2487,15 @@ class TTModelRunner:
         Config-time refusal in ``TTPlatform.validate_request`` means no
         request can reach here on the current backend, so these raises guard a
         direct ``EngineCoreRequest`` that bypassed the frontend.
+
+        **Inert in situ today.** Both call sites invoke this method without a
+        ``prompt_logits_by_req``, so the success path is unreachable and any
+        request that somehow asks raises the "no per-prompt-position prefill
+        logits" error below. The tests cover this method directly and pin that
+        the two builders consult it; nothing covers the path end to end,
+        because no tt-metal generator supplies the input yet. Wiring the
+        generator's per-position output into the two call sites is runner work
+        that has not been done.
         """
         if not self.input_batch.prompt_logprobs_requested:
             return dict.fromkeys(req_ids, None)
