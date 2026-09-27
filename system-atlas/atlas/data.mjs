@@ -15,7 +15,7 @@ export const META = {
   stats: [
     { k: 'System', v: 'vllm-tt-plugin' },
     { k: 'Roles', v: '26' },
-    { k: 'Plugin', v: '12.7k lines' },
+    { k: 'Plugin', v: '13.3k lines' },
     { k: 'Upstream', v: '0.26.0' },
   ],
   intro: `**This file is the living source of truth for the plugin's architecture.** The interactive atlas, <code>SYSTEM.md</code>, and every claim in the research report rebuild from it.`,
