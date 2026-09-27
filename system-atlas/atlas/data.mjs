@@ -378,9 +378,5 @@ export const HOW_HTML = `<div class="eyebrow">vllm-tt-plugin · vLLM 0.26.0</div
   feature_support.py · utils/dp_discovery.py
 (upstream v0.26.0)   read at the tag, not vendored here
 system-atlas/atlas/         this atlas</pre>
-<h3 class="sec">Size, largest first</h3><pre>model_runner.py 2899   platform.py  2290   input_batch.py  1551
-scheduler.py     996   worker.py     977   async_decode.py   945
-lane_scheduler.py 816  spec_accept.py 512    spec_decode.py  385
-config.py        369   dp_discovery.py 270   logprobs.py      190
-model_input.py  177  structured_output.py 100  loader.py     55</pre>
-<h3 class="sec">Tests</h3><p>730 host tests collected and passing across 37 test modules under <code>tests/</code> (excluding <code>tests/tt</code>, which needs a live server and TT hardware). Zero skips and zero xfails in the host suite. <code>ci/host-stubs/ttnn/</code> supplies an import-only <code>ttnn</code> stand-in whose every device-reaching entry point raises, so a test that starts depending on real hardware fails loudly instead of passing against a fake device.</p>`;
+<h3 class="sec">Size, largest first</h3><pre>{{SIZE_TABLE}}</pre>
+<h3 class="sec">Tests</h3><p>{{TESTS}}</p>`;

@@ -4,9 +4,42 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { META, DECISIONS, GROUPS, NODES, FLOWS, CH, HOW_HTML } from './data.mjs';
+import { measure } from './measure.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = META.outDir ? join(here, META.outDir) : join(here, '..');
+// LOCAL DIVERGENCE from the upstream skill: figures the atlas states about the
+// repository are measured, not hand-written. See measure.mjs for why.
+const m = measure(join(here, '..', '..'));
+
+// Only what the run observed. No clause is emitted that was not measured, so
+// the text cannot claim a passing suite from a command that only collected.
+const s = m.suite;
+const notGreen = s.failed || s.errors;
+const suiteSentence = [
+  `${s.passed} passed`,
+  notGreen ? `${s.failed} failed` : null,
+  s.errors ? `${s.errors} error${s.errors === 1 ? '' : 's'}` : null,
+  s.skipped ? `${s.skipped} skipped` : null,
+  s.xfailed ? `${s.xfailed} xfailed` : null,
+]
+  .filter(Boolean)
+  .join(', ');
+
+const HOW = HOW_HTML.replace('{{SIZE_TABLE}}', m.sizeTable).replace(
+  '{{TESTS}}',
+  `${suiteSentence} across ${m.testModules} test modules under <code>tests/</code> ` +
+    `(excluding <code>tests/tt</code>, which needs a live server and TT hardware), ` +
+    `measured by running the host suite at build time. ` +
+    `<code>ci/host-stubs/ttnn/</code> supplies an import-only <code>ttnn</code> ` +
+    `stand-in whose every device-reaching entry point raises, so a test that ` +
+    `starts depending on real hardware fails loudly instead of passing against ` +
+    `a fake device.`,
+);
+
+const STATS = META.stats.map((st) =>
+  st.k === 'Plugin' ? { ...st, v: `${m.totalLabel} lines` } : st,
+);
 
 // ---------- shared helpers ----------
 const Q = (c) => (typeof c === 'string' ? { q: c } : c);
@@ -93,10 +126,11 @@ function buildAtlasHtml() {
     `const NODES = ${JSON.stringify(NODES)};`,
     `const FLOWS = ${JSON.stringify(FLOWS)};`,
     `const CH = ${JSON.stringify(CH)};`,
-    `const HOW_HTML = ${JSON.stringify(HOW_HTML)};`,
+    `const HOW_HTML = ${JSON.stringify(HOW)};`,
     `const DECISIONS_HTML = ${JSON.stringify(decisionsHtml)};`,
   ].join('\n');
-  return tpl.replace('__TITLE__', META.title + ' Atlas').replace('/*__DATA__*/', data + `\nconst STATS = ${JSON.stringify(META.stats||[])};\nconst TITLE = ${JSON.stringify(META.title||'System')};`);
+
+  return tpl.replace('__TITLE__', META.title + ' Atlas').replace('/*__DATA__*/', data + `\nconst STATS = ${JSON.stringify(STATS||[])};\nconst TITLE = ${JSON.stringify(META.title||'System')};`);
 }
 
 writeFileSync(join(outDir, 'SYSTEM.md'), buildSystemMd());
