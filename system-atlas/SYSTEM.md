@@ -6,7 +6,7 @@ _Question status: **28 open · 5 resolved**._
 
 ## One paragraph
 
-This atlas covers **both repositories**: the <code>vllm-tt-plugin</code> that Tenstorrent maintains, and the stock vLLM 0.26.0 it plugs into, nested read-only at <code>third_party/vllm-0.26.0/</code>. The plugin teaches stock vLLM how to run on Tenstorrent hardware without forking vLLM. It registers itself through two entry points, substitutes a Platform, a Worker, a Scheduler and a ModelRunner for the ones vLLM would pick, and routes every model through a tt-metal generator that owns the actual device kernels. It ships three execution modes, owns no model code of its own, and refuses loudly — rather than silently degrading — on every upstream vLLM feature the TT backend does not serve.
+This atlas covers **both repositories**: the <code>vllm-tt-plugin</code> that Tenstorrent maintains, and the stock vLLM 0.26.0 it plugs into. The plugin teaches stock vLLM how to run on Tenstorrent hardware without forking vLLM. It registers itself through two entry points, substitutes a Platform, a Worker, a Scheduler and a ModelRunner for the ones vLLM would pick, and routes every model through a tt-metal generator that owns the actual device kernels. It ships three execution modes, owns no model code of its own, and refuses loudly — rather than silently degrading — on every upstream vLLM feature the TT backend does not serve.
 
 ## Decisions locked
 
@@ -344,7 +344,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** vLLM does not promise stability on its internals, and this plugin depends on a lot of them. This is the honest inventory of the bindings, so a version bump is a checklist rather than a surprise.
 
-**How it's built.** Derived with `grep -rnE "^\s*(from|import)\s+vllm" src/` per the repo's own playbook (`.github/prompts/vllm-upgrade-assessment.prompt.md:53-115`). Subclassed bases: `TTPlatform(Platform)`, `TTWorker(WorkerBase)`, `TTScheduler(AsyncScheduler)`, `TTLaneCoordinator(SchedulerInterface)`, `TTModelLoader(BaseModelLoader)`, `DeferredDecodeOutput`/`AsyncTTModelRunnerOutput(AsyncModelRunnerOutput)`, `TTLaunchPlan(EngineLaunchPlan)`, `TTCoreEngineLauncher(CoreEngineLauncher)`. Constructed upstream dataclasses: `ModelRunnerOutput`, `SchedulerOutput`, `SamplingMetadata`, `CachedRequestState`, `LogprobsTensors`, `KVCacheConfig` and specs, `EngineCoreOutputs`, `GrammarOutput`, `SchedulerStats`, `MultiGroupBlockTable(...)`. Seven runtime monkeypatches in `platform.py` at lines 625, 685, 731, 798, 864, 885, 945. Seven internal `additional_config` keys. Ten `model_capabilities` keys — note that `tt_block_kv_extent_tokens`, `supports_device_penalties` and `fabric_config` are consumed in code but are missing from the AGENTS.md §6 table. The full per-member matrix is at `.deep-research/notes/gap-matrix.md`.
+**How it's built.** Derived with `grep -rnE "^\s*(from|import)\s+vllm" src/` per the repo's own playbook (`.github/prompts/vllm-upgrade-assessment.prompt.md:53-115`). Subclassed bases: `TTPlatform(Platform)`, `TTWorker(WorkerBase)`, `TTScheduler(AsyncScheduler)`, `TTLaneCoordinator(SchedulerInterface)`, `TTModelLoader(BaseModelLoader)`, `DeferredDecodeOutput`/`AsyncTTModelRunnerOutput(AsyncModelRunnerOutput)`, `TTLaunchPlan(EngineLaunchPlan)`, `TTCoreEngineLauncher(CoreEngineLauncher)`. Constructed upstream dataclasses: `ModelRunnerOutput`, `SchedulerOutput`, `SamplingMetadata`, `CachedRequestState`, `MultiGroupBlockTable` and the KV cache specs. The `model_capabilities` keys the plugin actually reads go beyond the AGENTS.md §6 table: that table lists ten, and `tt_block_kv_extent_tokens`, `supports_device_penalties` and `fabric_config` are consumed in code but absent from it. The per-member matrix for every coupled symbol — plugin site, base behaviour, and whether it is called unconditionally — is not committed here; it is re-derived per version bump using the playbook above, which is the point of the playbook.
 
 **Steps in execution.**
 
@@ -510,7 +510,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** The GPU implementation. It shows which optional methods exist in practice and what they do — LoRA, sleep, dummy batches — so you can see which ones a plugin is declining rather than missing.
 
-**How it's built.** `vllm/v1/worker/gpu_worker.py` at v0.26.0, 1453 lines. Implements `get_model` (929), the four LoRA methods (add_lora 1237, remove_lora 1240, list_loras 1243, pin_lora 1246, one-line delegations to the model runner), `execute_dummy_batch` (1233, sized by `model_runner.uniform_decode_query_len`), `sleep(level)` (192) and `wake_up(tags)` (227) — the last three absent from `WorkerBase` entirely. `TTWorker` mirrors the first group and deliberately omits the rest, each omission recorded in the gap matrix. **Substituted by** `TTWorker` (`worker.py:183`): a mesh device instead of a GPU, a tt-metal generator instead of vLLM layers, and no profiling run.
+**How it's built.** `vllm/v1/worker/gpu_worker.py` at v0.26.0, 1453 lines. Implements `get_model` (929), the four LoRA methods (add_lora 1237, remove_lora 1240, list_loras 1243, pin_lora 1246, one-line delegations to the model runner), `execute_dummy_batch` (1233, sized by `model_runner.uniform_decode_query_len`), `sleep(level)` (192) and `wake_up(tags)` (227) — the last three absent from `WorkerBase` entirely. `TTWorker` mirrors the first group and omits only `sleep` and `wake_up`, which cannot be reached on TT because `ModelConfig.__post_init__` already refuses `--enable-sleep-mode` for any non-CUDA/ROCm/XPU platform; the LoRA quartet and `execute_dummy_batch` are present and refuse by name. **Substituted by** `TTWorker` (`worker.py:183`): a mesh device instead of a GPU, a tt-metal generator instead of vLLM layers, and no profiling run.
 
 **Steps in execution.**
 
@@ -678,7 +678,7 @@ src/vllm_tt_plugin/
   spec_decode.py · spec_accept.py                    speculative contract
   feature_support.py                                 refusals for unserved features
   utils/dp_discovery.py
-third_party/vllm-0.26.0/                            nested upstream baseline (read-only)
+(upstream vLLM v0.26.0)                      read at that tag, not vendored here
 system-atlas/atlas/                                  this atlas
 ```
 

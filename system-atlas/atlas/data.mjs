@@ -2,9 +2,10 @@
 // Build: bun system-atlas/atlas/build.mjs  → writes SYSTEM.md and atlas.html
 //
 // Baseline: vLLM 0.26.0 (tag v0.26.0 = 568afb3a13806beb53bb2e6bd518269357b237c0),
-// nested read-only at third_party/vllm-0.26.0/ and pinned by
-// docs/install-vllm-tt.sh:36. Every "how" below cites a file:line in this repo
-// or in that nested tree.
+// pinned by docs/install-vllm-tt.sh:36. Every "how" below cites a file:line in
+// this repo, or an upstream file:line readable at that tag. Upstream paths are
+// given as <upstream-path>@v0.26.0 rather than as a local checkout, because the
+// nested reference tree is gitignored and is not part of this repository.
 
 export const META = {
   title: 'vLLM TT Plugin',
@@ -18,7 +19,7 @@ export const META = {
     { k: 'Upstream', v: '0.26.0' },
   ],
   intro: `**This file is the living source of truth for the plugin's architecture.** The interactive atlas, <code>SYSTEM.md</code>, and every claim in the research report rebuild from it.`,
-  onePara: `This atlas covers **both repositories**: the <code>vllm-tt-plugin</code> that Tenstorrent maintains, and the stock vLLM 0.26.0 it plugs into, nested read-only at <code>third_party/vllm-0.26.0/</code>. The plugin teaches stock vLLM how to run on Tenstorrent hardware without forking vLLM. It registers itself through two entry points, substitutes a Platform, a Worker, a Scheduler and a ModelRunner for the ones vLLM would pick, and routes every model through a tt-metal generator that owns the actual device kernels. It ships three execution modes, owns no model code of its own, and refuses loudly — rather than silently degrading — on every upstream vLLM feature the TT backend does not serve.`,
+  onePara: `This atlas covers **both repositories**: the <code>vllm-tt-plugin</code> that Tenstorrent maintains, and the stock vLLM 0.26.0 it plugs into. The plugin teaches stock vLLM how to run on Tenstorrent hardware without forking vLLM. It registers itself through two entry points, substitutes a Platform, a Worker, a Scheduler and a ModelRunner for the ones vLLM would pick, and routes every model through a tt-metal generator that owns the actual device kernels. It ships three execution modes, owns no model code of its own, and refuses loudly — rather than silently degrading — on every upstream vLLM feature the TT backend does not serve.`,
   costModel: [
     'The plugin adds no per-token compute of its own. Its cost is configuration-time: model registration, mesh construction, and KV-pool sizing happen once per process.',
     '`model_runner.py` (2,753 lines) and `platform.py` (2,260 lines) are the two files a reviewer watches for growth; AGENTS.md §7 asks new branches there to move to a named neighbour instead.',
@@ -35,7 +36,7 @@ export const META = {
   spec_decode.py · spec_accept.py                    speculative contract
   feature_support.py                                 refusals for unserved features
   utils/dp_discovery.py
-third_party/vllm-0.26.0/                            nested upstream baseline (read-only)
+(upstream vLLM v0.26.0)                      read at that tag, not vendored here
 system-atlas/atlas/                                  this atlas`,
 };
 
@@ -169,7 +170,7 @@ export const NODES = [
   { id: 'UC', code: 'UC', name: 'Upstream coupling', short: 'COUPLING', group: 'up', gx: 11, gy: 18, w: 3, d: 3, h: 36, kind: 'slab',
     one: 'Every place the plugin binds to vLLM internals, and therefore every place a vLLM bump can break it.',
     what: 'vLLM does not promise stability on its internals, and this plugin depends on a lot of them. This is the honest inventory of the bindings, so a version bump is a checklist rather than a surprise.',
-    how: 'Derived with <code>grep -rnE "^\\s*(from|import)\\s+vllm" src/</code> per the repo\'s own playbook (<code>.github/prompts/vllm-upgrade-assessment.prompt.md:53-115</code>). Subclassed bases: <code>TTPlatform(Platform)</code>, <code>TTWorker(WorkerBase)</code>, <code>TTScheduler(AsyncScheduler)</code>, <code>TTLaneCoordinator(SchedulerInterface)</code>, <code>TTModelLoader(BaseModelLoader)</code>, <code>DeferredDecodeOutput</code>/<code>AsyncTTModelRunnerOutput(AsyncModelRunnerOutput)</code>, <code>TTLaunchPlan(EngineLaunchPlan)</code>, <code>TTCoreEngineLauncher(CoreEngineLauncher)</code>. Constructed upstream dataclasses: <code>ModelRunnerOutput</code>, <code>SchedulerOutput</code>, <code>SamplingMetadata</code>, <code>CachedRequestState</code>, <code>LogprobsTensors</code>, <code>KVCacheConfig</code> and specs, <code>EngineCoreOutputs</code>, <code>GrammarOutput</code>, <code>SchedulerStats</code>, <code>MultiGroupBlockTable(...)</code>. Seven runtime monkeypatches in <code>platform.py</code> at lines 625, 685, 731, 798, 864, 885, 945. Seven internal <code>additional_config</code> keys. Ten <code>model_capabilities</code> keys — note that <code>tt_block_kv_extent_tokens</code>, <code>supports_device_penalties</code> and <code>fabric_config</code> are consumed in code but are missing from the AGENTS.md §6 table. The full per-member matrix is at <code>.deep-research/notes/gap-matrix.md</code>.',
+    how: 'Derived with <code>grep -rnE "^\\s*(from|import)\\s+vllm" src/</code> per the repo\'s own playbook (<code>.github/prompts/vllm-upgrade-assessment.prompt.md:53-115</code>). Subclassed bases: <code>TTPlatform(Platform)</code>, <code>TTWorker(WorkerBase)</code>, <code>TTScheduler(AsyncScheduler)</code>, <code>TTLaneCoordinator(SchedulerInterface)</code>, <code>TTModelLoader(BaseModelLoader)</code>, <code>DeferredDecodeOutput</code>/<code>AsyncTTModelRunnerOutput(AsyncModelRunnerOutput)</code>, <code>TTLaunchPlan(EngineLaunchPlan)</code>, <code>TTCoreEngineLauncher(CoreEngineLauncher)</code>. Constructed upstream dataclasses: <code>ModelRunnerOutput</code>, <code>SchedulerOutput</code>, <code>SamplingMetadata</code>, <code>CachedRequestState</code>, <code>MultiGroupBlockTable</code> and the KV cache specs. The <code>model_capabilities</code> keys the plugin actually reads go beyond the AGENTS.md §6 table: that table lists ten, and <code>tt_block_kv_extent_tokens</code>, <code>supports_device_penalties</code> and <code>fabric_config</code> are consumed in code but absent from it. The per-member matrix for every coupled symbol — plugin site, base behaviour, and whether it is called unconditionally — is not committed here; it is re-derived per version bump using the playbook above, which is the point of the playbook.',
     steps: [['Grep imports', 'The four playbook categories, re-derived every time.'], ['Diff the tag', 'BASELINE (the 0.26.0 pin) against the target tag.'], ['Classify', 'BREAKING-IMPORT / -CONSTRUCT / -OVERRIDE / (silent) / BEHAVIORAL / NONE.'], ['Plan', 'One required edit per coupled symbol, with a file:line.']],
     cond: ['AGENTS.md §6 lists ten capability keys but three more are consumed in code. The table is incomplete.', 'launcher.py runs its ImportError fallback: upstream CoreEngineLauncher / EngineLaunchPlan are absent at 0.26.0, so it is dormant and unhooked.'] },
 
@@ -233,7 +234,7 @@ export const NODES = [
   { id: 'vWorker', code: 'vW', name: 'Reference Worker', short: 'V-WORKER', group: 'v', gx: 4, gy: 31.5, w: 3, d: 3, h: 34, kind: 'box',
     one: 'What a complete WorkerBase implementation looks like, and the bar TTWorker is measured against.',
     what: 'The GPU implementation. It shows which optional methods exist in practice and what they do — LoRA, sleep, dummy batches — so you can see which ones a plugin is declining rather than missing.',
-    how: '`vllm/v1/worker/gpu_worker.py` at v0.26.0, 1453 lines. Implements `get_model` (929), the four LoRA methods (add_lora 1237, remove_lora 1240, list_loras 1243, pin_lora 1246, one-line delegations to the model runner), `execute_dummy_batch` (1233, sized by `model_runner.uniform_decode_query_len`), `sleep(level)` (192) and `wake_up(tags)` (227) — the last three absent from `WorkerBase` entirely. `TTWorker` mirrors the first group and deliberately omits the rest, each omission recorded in the gap matrix. **Substituted by** `TTWorker` (`worker.py:183`): a mesh device instead of a GPU, a tt-metal generator instead of vLLM layers, and no profiling run.',
+    how: '`vllm/v1/worker/gpu_worker.py` at v0.26.0, 1453 lines. Implements `get_model` (929), the four LoRA methods (add_lora 1237, remove_lora 1240, list_loras 1243, pin_lora 1246, one-line delegations to the model runner), `execute_dummy_batch` (1233, sized by `model_runner.uniform_decode_query_len`), `sleep(level)` (192) and `wake_up(tags)` (227) — the last three absent from `WorkerBase` entirely. `TTWorker` mirrors the first group and omits only `sleep` and `wake_up`, which cannot be reached on TT because `ModelConfig.__post_init__` already refuses `--enable-sleep-mode` for any non-CUDA/ROCm/XPU platform; the LoRA quartet and `execute_dummy_batch` are present and refuse by name. **Substituted by** `TTWorker` (`worker.py:183`): a mesh device instead of a GPU, a tt-metal generator instead of vLLM layers, and no profiling run.',
     steps: [['init_device', 'Set the device up, then run the platform hook again per subprocess.'], ['load_model', 'Weights onto the device; the runner holds the model.'], ['execute_model', 'One step; returns None to defer sampling.']],
     cond: ['TT init_device re-runs TTPlatform.check_and_update_config because multiprocessing means platform class state is per process.'] },
 
@@ -341,7 +342,7 @@ export const CH = [
 
   { id: 'up', title: 'Upstream coupling and the refusal surface', reveal: ['UC', 'FS'],
     lede: `Where the plugin binds to vLLM internals, and how it handles what it does not serve.`,
-    story: `<p>The plugin binds to a lot of vLLM internals, so a version bump is a checklist rather than a surprise — <code>.github/prompts/vllm-upgrade-assessment.prompt.md</code> is the method and <code>.deep-research/notes/gap-matrix.md</code> is the current output. On the other side, <code>feature_support.py</code> turns every gap into a loud refusal at config time, <mark>naming the flag the operator actually typed</mark>. Features the base class already refuses correctly get no validator at all: adding one would be a second message for a problem upstream already reports well.</p>`,
+    story: `<p>The plugin binds to a lot of vLLM internals, so a version bump is a checklist rather than a surprise — <code>.github/prompts/vllm-upgrade-assessment.prompt.md</code> is the method, and every gap it finds is recorded per member in the questions on this map. On the other side, <code>feature_support.py</code> turns every gap into a loud refusal at config time, <mark>naming the flag the operator actually typed</mark>. Features the base class already refuses correctly get no validator at all: adding one would be a second message for a problem upstream already reports well.</p>`,
     flow: [['UC', 'FS', 'gap found', { member: 'cache_dtype' }], ['FS', 'UC', 'refused', { flag: '--kv-cache-dtype', value: 'fp8' }]] },
 
   { id: 'upengine', title: 'The upstream v1 engine', reveal: ['vPlat', 'vInput', 'vSamp'],
@@ -366,7 +367,7 @@ export const CH = [
 ];
 
 export const HOW_HTML = `<div class="eyebrow">vllm-tt-plugin · vLLM 0.26.0</div><h1 class="t">How it's built</h1><div class="sub">the shape, and what sits around it</div>
-<h3 class="sec">Baseline</h3><p>Upstream vLLM tag <code>v0.26.0</code> = <code>568afb3a13806beb53bb2e6bd518269357b237c0</code>, nested read-only at <code>third_party/vllm-0.26.0/</code> and pinned by <code>docs/install-vllm-tt.sh:36</code>. Every gap claim in the research report is measured against that tag, not against upstream <code>main</code>.</p>
+<h3 class="sec">Baseline</h3><p>Upstream vLLM tag <code>v0.26.0</code> = <code>568afb3a13806beb53bb2e6bd518269357b237c0</code>, pinned by <code>docs/install-vllm-tt.sh:36</code>. Every gap claim in the research report is measured against that tag, not against upstream <code>main</code>. Upstream citations on this map are written <code>path:line</code> against that tag; the analysis checkout used locally is gitignored and is not part of this repository.</p>
 <h3 class="sec">Filesystem</h3><pre>src/vllm_tt_plugin/
   entrypoints.py · model_registry.py · loader.py
   platform.py · config.py · logger.py
@@ -375,11 +376,11 @@ export const HOW_HTML = `<div class="eyebrow">vllm-tt-plugin · vLLM 0.26.0</div
   async_decode.py · structured_output.py · logprobs.py
   spec_decode.py · spec_accept.py
   feature_support.py · utils/dp_discovery.py
-third_party/vllm-0.26.0/   nested upstream, read-only
+(upstream v0.26.0)   read at the tag, not vendored here
 system-atlas/atlas/         this atlas</pre>
-<h3 class="sec">Size, largest first</h3><pre>model_runner.py 2753   platform.py 2260   input_batch.py 1476
-scheduler.py     996   async_decode.py 945   worker.py       892
-lane_scheduler.py 816  spec_accept.py 512    config.py       369
+<h3 class="sec">Size, largest first</h3><pre>model_runner.py 2753   platform.py  2290   input_batch.py  1505
+scheduler.py     996   worker.py     977   async_decode.py   945
+lane_scheduler.py 816  spec_accept.py 512    config.py        369
 spec_decode.py   385   dp_discovery.py 270   model_input.py  177
 structured_output.py 100  logprobs.py 81  loader.py 55</pre>
-<h3 class="sec">Tests</h3><p>349 host test functions across 29 files under <code>tests/</code> (excluding <code>tests/tt</code>, which needs a live server and TT hardware). Zero skips and zero xfails in the host suite. <code>ci/host-stubs/ttnn/</code> supplies an import-only <code>ttnn</code> stand-in whose every device-reaching entry point raises, so a test that starts depending on real hardware fails loudly instead of passing against a fake device.</p>`;
+<h3 class="sec">Tests</h3><p>411 host test functions across 36 files under <code>tests/</code> (excluding <code>tests/tt</code>, which needs a live server and TT hardware). Zero skips and zero xfails in the host suite. <code>ci/host-stubs/ttnn/</code> supplies an import-only <code>ttnn</code> stand-in whose every device-reaching entry point raises, so a test that starts depending on real hardware fails loudly instead of passing against a fake device.</p>`;

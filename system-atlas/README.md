@@ -45,6 +45,8 @@ cd system-atlas && python3 -m http.server 8000
 ## Baseline
 
 Every claim in the atlas is measured against vLLM **0.26.0**, pinned by
-`docs/install-vllm-tt.sh:36` and nested read-only at `third_party/vllm-0.26.0/`
-(tag `v0.26.0` = `568afb3a13806beb53bb2e6bd518269357b237c0`). It is not measured
-against upstream `main`.
+`docs/install-vllm-tt.sh:36` (tag `v0.26.0` =
+`568afb3a13806beb53bb2e6bd518269357b237c0`). It is not measured against
+upstream `main`. Upstream citations are written `path:line` against that tag; no
+upstream checkout is vendored into this repository, so clone vLLM at that tag
+to follow them.

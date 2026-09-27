@@ -332,11 +332,14 @@ class InputBatch:
         self.req_id_to_index[req_id] = req_index
 
         # Copy the prompt token ids and output token ids. `prompt_token_ids` is
-        # never None here: the scheduler replaces an embeds-only prompt with
-        # placeholder ids (scheduler.py), `build_cached_request_state` raises
-        # NotImplementedError for one, and `CachedRequestState.__post_init__`
-        # refuses a both-None state, so this read is total. A guard here would
-        # be unreachable code.
+        # never None here. Two plugin-side paths close that: the scheduler
+        # replaces an embeds-only prompt with placeholder token ids, and
+        # `build_cached_request_state` -- the single constructor both the
+        # front-packed and lane-DP paths use -- raises NotImplementedError for
+        # one first. `CachedRequestState.__post_init__` also refuses a state
+        # whose ids and embeds are both None, but that is not what closes this
+        # case: an embeds-only state does construct. A guard here would be
+        # unreachable code.
         prompt_token_ids = request.prompt_token_ids
         num_prompt_tokens = len(prompt_token_ids)
         self.num_prompt_tokens[req_index] = num_prompt_tokens
