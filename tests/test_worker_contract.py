@@ -119,26 +119,29 @@ def test_sleep_members_are_unreachable_on_tt(name):
     assert name not in TTWorker.__dict__, name
 
 
-def test_execute_dummy_batch_is_a_known_unimplemented_dp_member():
-    """NOT unreachable, unlike the sleep members. A real, recorded gap.
+def test_execute_dummy_batch_refuses_by_name_not_by_attribute_error():
+    """Reachable on the DP path, so the failure must name itself.
 
-    `execute_dummy_batch` is the data-parallelism surface upstream's plugin
-    design doc names, and it is reached on DP deployments:
-    `LLMEngine.has_unfinished_requests_dp` sets `should_execute_dummy_batch`
-    when a rank has nothing unfinished while peers do (llm_engine.py:196-202),
-    `step()` fires it (:297-299), and `core.py:2049-2055` fires it again from
-    inside `run_busy_loop` -- the DP busy loop -- whenever a step executed
-    nothing. Both land on `collective_rpc("execute_dummy_batch")` via
-    `executor/abstract.py:249-250`, which reaches `WorkerWrapperBase.__getattr__`.
+    `execute_dummy_batch` is not on `WorkerBase`; upstream reaches it by
+    `Executor.collective_rpc("execute_dummy_batch")` string dispatch, which
+    lands on `WorkerWrapperBase.__getattr__`. Left unimplemented, a TT
+    standard-DP rank that idles while a peer runs gets a bare `AttributeError`
+    from inside a worker RPC loop. It raises `NotImplementedError` instead, and
+    says which DP condition triggered it and what to do about it.
 
-    So a TT standard-DP rank that idles while a peer runs gets an
-    `AttributeError` from inside a worker RPC loop today. It is deliberately
-    unimplemented: the GPU version is a real dummy forward sized by
-    `model_runner.uniform_decode_query_len`, holding DP ranks in collective
-    lockstep, and a wrong one produces a DP hang rather than a clean error.
-    There is no Tenstorrent device here to validate a mesh forward against, so
-    this test records the gap rather than pretending it is closed. Tracked as
-    Finding F3 in .deep-research/notes/gap-matrix.md; it needs a paired
-    tt-metal change and a device test.
+    The functional implementation is deliberately absent: the reference version
+    is a real dummy forward sized by `model_runner.uniform_decode_query_len`
+    whose job is holding DP ranks in collective lockstep, and a wrong one causes
+    a DP hang rather than a clean error. Finding F3 in the gap matrix.
     """
-    assert "execute_dummy_batch" not in TTWorker.__dict__
+    assert "execute_dummy_batch" in TTWorker.__dict__, (
+        "TTWorker must answer execute_dummy_batch by name; upstream dispatches "
+        "it by string, so a missing method is an AttributeError in a worker loop"
+    )
+    worker = _worker(_Tiny())
+    with pytest.raises(NotImplementedError) as excinfo:
+        worker.execute_dummy_batch()
+    message = str(excinfo.value)
+    assert "TT backend" in message, message
+    assert "data-parallel" in message, message
+    assert "--data-parallel-size 1" in message, message

@@ -332,6 +332,39 @@ class TTWorker(WorkerBase):
             "loaded and none can be listed. See add_lora for the full reason."
         )
 
+    def execute_dummy_batch(self) -> None:
+        """Refuse the data-parallel dummy batch by name, not by AttributeError.
+
+        This member is NOT on ``WorkerBase``. Upstream reaches it by
+        ``Executor.collective_rpc("execute_dummy_batch")`` — string dispatch
+        landing on ``WorkerWrapperBase.__getattr__`` — so a missing override
+        surfaces as an ``AttributeError`` from inside a worker RPC loop. Two
+        call sites fire it, both on the data-parallel path:
+        ``LLMEngine.has_unfinished_requests_dp`` sets the flag when a rank has
+        nothing unfinished while peers do (``llm_engine.py:196-202``, fired at
+        ``:297-299``), and ``DPEngineCoreProc.run_busy_loop`` fires it whenever a
+        step executed nothing (``core.py:2024`` and ``:2049-2055``).
+
+        The reference implementation is a real dummy forward sized by
+        ``model_runner.uniform_decode_query_len``, whose job is to hold DP ranks
+        in collective lockstep. Doing that on TT means a device forward on the
+        mesh, and a wrong one produces a DP hang rather than a clean error, so
+        it is not implemented without device validation. This raises instead of
+        vanishing, so the failure names itself.
+
+        Tracked as Finding F3 in .deep-research/notes/gap-matrix.md; needs a
+        paired tt-metal change and a device test.
+        """
+        raise NotImplementedError(
+            "The dummy batch is not implemented for the TT backend. Upstream "
+            "runs it on a data-parallel rank that has no ready requests while "
+            "peers do, to keep every rank in collective lockstep; the TT "
+            "equivalent needs a validated device forward on the mesh, so this "
+            "rank will not join the collective. Run with --data-parallel-size 1, "
+            "or use a build that implements the TT dummy batch. See gap-matrix "
+            "Finding F3."
+        )
+
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
         """
         For the GPU/TPU backends, this method generates the KVCacheSpec by
