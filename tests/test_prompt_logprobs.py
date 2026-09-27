@@ -18,8 +18,8 @@ the rank column counts vocabulary entries whose logit is `>=` the target's.
 """
 
 from types import SimpleNamespace
-import numpy as np
 
+import numpy as np
 import pytest
 import torch
 
@@ -173,7 +173,6 @@ def test_width_is_num_prompt_logprobs_plus_one():
     )
 
     assert packed.logprob_token_ids.shape == (1, 4)
- 
 
 
 def test_minus_one_requests_the_whole_vocabulary():
@@ -335,7 +334,9 @@ def _runner(
 
 
 def test_no_request_asking_yields_none_per_request():
-    runner = _runner(requested=PROMPT_LOGPROBS_NONE_SENTINEL, token_ids=None, num_prompt_tokens=0)
+    runner = _runner(
+        requested=PROMPT_LOGPROBS_NONE_SENTINEL, token_ids=None, num_prompt_tokens=0
+    )
 
     result = TTModelRunner._compute_prompt_logprobs_dict(runner, ["r0", "r1"])
 
@@ -377,8 +378,8 @@ def test_asking_with_logits_returns_a_packed_result():
     assert packed.logprob_token_ids.shape == (3, 2)
     # Targets are prompt_token_ids[1:], i.e. 1, 2, 3.
     assert packed.logprob_token_ids[:, 0].tolist() == [1, 2, 3]
- 
- 
+
+
 def test_single_row_for_a_multi_token_prompt_is_reported_not_swallowed():
     # This is the shape today's tt-metal generator produces: logits for the
     # final prompt position only. Returning None here would tell a caller that
@@ -418,8 +419,8 @@ def test_missing_logits_for_one_request_names_that_request():
         TTModelRunner._compute_prompt_logprobs_dict(
             runner, ["r0"], prompt_logits_by_req={"other": logits}
         )
- 
- 
+
+
 def test_mid_prompt_resume_is_refused_rather_than_mis_aligned():
     # Chunked prefill is on by default, so a request resuming at position k > 0
     # is routine. Reading targets from offset 1 would pair position k's target
@@ -443,3 +444,60 @@ def test_mid_prompt_resume_is_refused_rather_than_mis_aligned():
     assert "--no-enable-chunked-prefill" in message
 
 
+# --------------------------------------------------------------------------
+# The two output sites must route through the seam
+# --------------------------------------------------------------------------
+
+
+def _recording_runner(calls: list) -> SimpleNamespace:
+    """A stub whose seam records the call instead of computing anything.
+
+    The seam is also tested directly above; these two pin that the *output
+    builders* consult it. Reverting either call site to a bare
+    ``dict.fromkeys(req_ids, None)`` leaves every other test in this file
+    green, because they call the seam directly rather than through the
+    builder.
+    """
+
+    def seam(req_ids, prompt_logits_by_req=None):
+        calls.append(list(req_ids))
+        return dict.fromkeys(req_ids, None)
+
+    return SimpleNamespace(
+        input_batch=SimpleNamespace(num_reqs=2),
+        _output_tokens_per_step=1,
+        _is_adaptive_block_output=False,
+        _tt_committed_width=lambda _toks: 1,
+        _compute_prompt_logprobs_dict=seam,
+    )
+
+
+def test_build_runner_output_consults_the_prompt_logprob_seam():
+    calls: list = []
+    runner = _recording_runner(calls)
+
+    TTModelRunner._build_runner_output(
+        runner,
+        sampled_token_ids=torch.tensor([[7], [8]], dtype=torch.int32),
+        req_ids=["a", "b"],
+    )
+
+    assert calls == [["a", "b"]]
+
+
+def test_chunked_prefill_output_consults_the_prompt_logprob_seam():
+    calls: list = []
+    runner = _recording_runner(calls)
+    runner._apply_sampled_tokens_to_state = lambda *_a, **_k: None
+
+    # One request, not suppressed as intermediate, so the builder takes the
+    # full path rather than returning early.
+    TTModelRunner._build_chunked_prefill_output(
+        runner,
+        req_ids=["c"],
+        sampled_token_ids=torch.tensor([[5]], dtype=torch.int32),
+        logprobs=None,
+        intermediate_mask=np.array([False]),
+    )
+
+    assert calls == [["c"]]
