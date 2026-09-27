@@ -58,9 +58,17 @@ def build_cached_request_state(new_req_data) -> CachedRequestState:
     construction -- prompt validation and per-request generator seeding -- lives
     in exactly one place.
     """
-    assert new_req_data.sampling_params is not None, (
-        "Pooling is not supported for TT yet"
-    )
+    # ValueError, not assert: `python -O` strips asserts, and this is the last
+    # guard. `validate_runner` gates on the declared `runner` field, whose
+    # default "auto" passes; upstream then resolves runner_type from the
+    # architecture and can land on "pooling" (ModelConfig._get_runner_type).
+    if new_req_data.sampling_params is None:
+        raise ValueError(
+            "Pooling requests are not supported by the TT backend. This "
+            "request carries pooling_params and no sampling_params, so the TT "
+            "backend cannot sample it. Use --runner generate, or serve the "
+            "pooling model on a backend that supports it."
+        )
     if new_req_data.prompt_token_ids is None:
         raise NotImplementedError("TT backend does not support prompt_embeds yet")
     sampling_params = new_req_data.sampling_params
@@ -335,7 +343,16 @@ class InputBatch:
 
         # Sampling-related.
         sampling_params = request.sampling_params
-        assert sampling_params is not None, "pooling requests not supported yet"
+        # Same reasoning as the new-request guard above: `runner` defaults to
+        # "auto" and passes the config-time check, so this is the last place a
+        # pooling request can be refused, and `python -O` would strip an assert.
+        if sampling_params is None:
+            raise ValueError(
+                "Pooling requests are not supported by the TT backend: this "
+                "request has pooling_params and no sampling_params. Use "
+                "--runner generate, or serve the pooling model on a backend "
+                "that supports it."
+            )
 
         # Block-output models commit a full canvas per step. Keep this
         # worker-side clamp even if a prebuilt EngineCoreRequest bypasses the

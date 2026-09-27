@@ -1440,10 +1440,6 @@ class TTPlatform(Platform):
         )
 
     @classmethod
-    def is_async_output_supported(cls, enforce_eager: bool | None) -> bool:
-        return True
-
-    @classmethod
     def inference_mode(cls):
         return torch.no_grad()
 
