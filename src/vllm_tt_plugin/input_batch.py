@@ -312,9 +312,14 @@ class InputBatch:
     ) -> None:
         if req_index is None:
             req_index = self.num_reqs
-        assert req_index < self.max_num_reqs, (
-            f"req_index={req_index} >= max_num_reqs={self.max_num_reqs}"
-        )
+        # ValueError/IndexError, not assert: `python -O` strips asserts, and this
+        # is the last place an over-subscribed batch is caught before the
+        # writes below scribble past the end of every per-request buffer.
+        if req_index >= self.max_num_reqs:
+            raise IndexError(
+                f"req_index={req_index} >= max_num_reqs={self.max_num_reqs} "
+                f"for request {request.req_id!r}: the batch is over-subscribed"
+            )
 
         req_id = request.req_id
         if req_index == len(self._req_ids):
@@ -326,9 +331,13 @@ class InputBatch:
 
         self.req_id_to_index[req_id] = req_index
 
-        # Copy the prompt token ids and output token ids.
+        # Copy the prompt token ids and output token ids. `prompt_token_ids` is
+        # never None here: the scheduler replaces an embeds-only prompt with
+        # placeholder ids (scheduler.py), `build_cached_request_state` raises
+        # NotImplementedError for one, and `CachedRequestState.__post_init__`
+        # refuses a both-None state, so this read is total. A guard here would
+        # be unreachable code.
         prompt_token_ids = request.prompt_token_ids
-        assert prompt_token_ids is not None, "prompt_embeds are not supported for TT"
         num_prompt_tokens = len(prompt_token_ids)
         self.num_prompt_tokens[req_index] = num_prompt_tokens
         self.token_ids_cpu[req_index, :num_prompt_tokens] = prompt_token_ids
