@@ -56,7 +56,11 @@ def test_host_sampling_control_is_not_refused(params):
 # --- refused: no path at any output width ----------------------------------
 
 SILENTLY_DROPPED = [
-    ("thinking_token_budget", SamplingParams(max_tokens=8, thinking_token_budget=256)),
+    (
+        "thinking_token_budget",
+        SamplingParams(max_tokens=8, thinking_token_budget=256),
+        "256",
+    ),
     (
         "repetition_detection",
         SamplingParams(
@@ -65,18 +69,32 @@ SILENTLY_DROPPED = [
                 max_pattern_size=4, min_count=3
             ),
         ),
+        "RepetitionDetectionParams",
     ),
-    ("extra_args", SamplingParams(max_tokens=8, extra_args={"custom": True})),
+    (
+        "extra_args",
+        SamplingParams(max_tokens=8, extra_args={"custom": True}),
+        "custom",
+    ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("field", "params"), SILENTLY_DROPPED, ids=[n for n, _ in SILENTLY_DROPPED]
+    ("field", "params", "value_fragment"),
+    SILENTLY_DROPPED,
+    ids=[n for n, _, _ in SILENTLY_DROPPED],
 )
-def test_dropped_control_is_refused_with_its_own_name(field, params):
+def test_dropped_control_is_refused_with_its_own_name(field, params, value_fragment):
+    """A refusal must name the field *and* print the offending value.
+
+    AGENTS.md §7 requires the message to print the value the operator got
+    wrong. Asserting only the field name would pass a message that prints
+    nothing but the name, which is what this caught.
+    """
     unsupported = unsupported_request_params(params)
     assert len(unsupported) == 1, unsupported
     assert field in unsupported[0]
+    assert value_fragment in unsupported[0], unsupported[0]
 
 
 def test_compat_sampling_covers_exactly_the_host_sampled_controls():

@@ -107,16 +107,41 @@ def test_get_cache_block_size_bytes_is_not_implemented():
     assert "get_cache_block_size_bytes" not in TTWorker.__dict__
 
 
-@pytest.mark.parametrize("name", ["sleep", "wake_up"])
-def test_sleep_members_are_unreachable_on_tt(name):
-    """Deliberate: upstream refuses --enable-sleep-mode before the worker exists.
+@pytest.mark.parametrize(
+    ("name", "args", "expected"),
+    [
+        ("sleep", (1,), "level=1"),
+        ("wake_up", (None,), "tags=None"),
+    ],
+)
+def test_sleep_members_refuse_by_name_not_by_attribute_error(name, args, expected):
+    """Reachable by string dispatch, so the failure must name itself.
 
-    `ModelConfig.__post_init__` raises "Sleep mode is not supported on current
-    platform." for any platform that is not CUDA/ROCm/XPU, and TT is OOT, so
-    `sleep` and `wake_up` can never be reached. Unlike the members below, these
-    have a config-time gate, so the question is closed rather than open.
+    Neither member is declared on `WorkerBase`. Upstream reaches them by
+    `Executor.collective_rpc("sleep", ...)` (`executor/abstract.py:323,343`),
+    whose `method` parameter is typed `str | Callable[[WorkerBase], _R]`
+    (`:155`), so the string resolves on the worker and a missing override
+    surfaces as a bare `AttributeError` from inside a worker RPC loop.
+
+    The serving path is closed — `ModelConfig.__post_init__` refuses
+    `enable_sleep_mode` because it gates on
+    `current_platform.is_sleep_mode_available()` (`model.py:546`), which is
+    False for TT. That closes the *serving* question, not the dispatch one: the
+    offline `LLM` API calls `llm.sleep()` / `llm.wake_up()` from
+    `benchmarks/throughput.py`, so the members are still reachable and a
+    refusal by name is what a user there should get.
     """
-    assert name not in TTWorker.__dict__, name
+    assert name in TTWorker.__dict__, (
+        f"TTWorker must answer {name} by name; upstream dispatches it by "
+        f"string, so a missing method is an AttributeError in a worker loop"
+    )
+    worker = _worker(_Tiny())
+    with pytest.raises(NotImplementedError) as excinfo:
+        getattr(worker, name)(*args)
+    message = str(excinfo.value)
+    assert "TT backend" in message, message
+    assert expected in message, message
+    assert "--enable-sleep-mode" in message, message
 
 
 def test_execute_dummy_batch_refuses_by_name_not_by_attribute_error():

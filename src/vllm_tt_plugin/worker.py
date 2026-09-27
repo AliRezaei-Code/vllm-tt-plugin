@@ -365,6 +365,39 @@ class TTWorker(WorkerBase):
             "Finding F3."
         )
 
+    def sleep(self, level: int = 1) -> None:
+        """Refuse engine sleep by name, not by AttributeError.
+
+        Neither ``sleep`` nor ``wake_up`` is declared on ``WorkerBase``.
+        Upstream reaches them by ``Executor.collective_rpc("sleep", ...)``
+        (``executor/abstract.py:323``), whose ``method`` parameter is typed
+        ``str | Callable[[WorkerBase], _R]`` (``:155``), so the string resolves
+        on the worker and a missing override surfaces as an ``AttributeError``
+        from inside a worker RPC loop.
+
+        Nothing on the serving path gets here: ``ModelConfig.__post_init__``
+        refuses ``enable_sleep_mode`` because it gates that flag on
+        ``current_platform.is_sleep_mode_available()`` (``model.py:546``),
+        which is ``False`` for TT. The offline ``LLM`` API reaches it from
+        ``benchmarks/throughput.py`` via ``llm.sleep()``/``llm.wake_up()``, so
+        this override is what makes that path name its own failure.
+        """
+        raise NotImplementedError(
+            f"Sleep mode is not implemented for the TT backend: refused sleep "
+            f"level={level!r}. Upstream frees and restores device state with a "
+            f"cumem allocator that has no TT equivalent, so the memory is not "
+            f"reclaimable this way. Do not pass --enable-sleep-mode; upstream "
+            f"already refuses it for this platform at ModelConfig.__post_init__."
+        )
+
+    def wake_up(self, tags: list[str] | None = None) -> None:
+        """Refuse engine wake-up by name. See :meth:`sleep` for why."""
+        raise NotImplementedError(
+            f"Wake-up is not implemented for the TT backend: refused tags="
+            f"{tags!r}. sleep() is refused for the same reason, so there is no "
+            f"state to restore. Do not pass --enable-sleep-mode."
+        )
+
     def get_kv_cache_spec(self) -> dict[str, KVCacheSpec]:
         """
         For the GPU/TPU backends, this method generates the KVCacheSpec by

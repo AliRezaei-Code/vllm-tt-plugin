@@ -25,10 +25,12 @@ Two rules govern everything here:
   read below was checked against the pinned tree in ``third_party/vllm-0.26.0``.
 
 Deliberately absent: sleep mode and the nixl/KV-connector capability members.
-``ModelConfig.__post_init__`` already refuses ``enable_sleep_mode`` for any
-platform that is not CUDA, ROCm or XPU, and ``Platform.get_nixl_*`` already
-return empty defaults, so a second message for a problem upstream reports well
-would be duplication rather than coverage.
+``ModelConfig.__post_init__`` already refuses ``enable_sleep_mode`` because it
+gates the flag on ``current_platform.is_sleep_mode_available()``
+(``third_party/vllm-0.26.0/vllm/config/model.py:546``), which is ``False`` for
+TT, and ``Platform.get_nixl_*`` already return empty defaults, so a second
+message for a problem upstream reports well would be duplication rather than
+coverage.
 """
 
 from typing import TYPE_CHECKING
@@ -280,6 +282,22 @@ def verify_quantization(cls: type, quant: str) -> None:
     )
 
 
+def _summarize(value: object) -> str:
+    """Render an offending request value for a refusal message.
+
+    AGENTS.md §7 requires a refusal to print the offending value, not only the
+    field name. ``repr`` on an arbitrary container can be arbitrarily long (and
+    ``RepetitionDetectionParams`` has no useful ``repr``), so this caps the
+    rendering and marks the truncation rather than letting a client-supplied
+    value flood the error.
+    """
+    rendered = repr(value)
+    limit = 120
+    if len(rendered) <= limit:
+        return rendered
+    return f"{rendered[:limit]}... (truncated from {len(rendered)} chars)"
+
+
 def unsupported_request_params(params: "SamplingParams") -> list[str]:
     """Return one line per request control the TT backend silently drops.
 
@@ -307,9 +325,11 @@ def unsupported_request_params(params: "SamplingParams") -> list[str]:
     if params.thinking_token_budget is not None:
         unsupported.append(f"thinking_token_budget={params.thinking_token_budget!r}")
     if params.repetition_detection is not None:
-        unsupported.append("repetition_detection (accepted: omitted/None)")
+        unsupported.append(
+            f"repetition_detection={_summarize(params.repetition_detection)}"
+        )
     if params.extra_args:
-        unsupported.append("extra_args (accepted: omitted/empty)")
+        unsupported.append(f"extra_args={_summarize(params.extra_args)}")
     return unsupported
 
 
