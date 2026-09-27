@@ -2,7 +2,7 @@
 
 **This file is the living source of truth for the plugin's architecture.** The interactive atlas, <code>SYSTEM.md</code>, and every claim in the research report rebuild from it.
 
-_Question status: **28 open · 5 resolved**._
+_Question status: **27 open · 5 resolved**._
 
 ## One paragraph
 
@@ -24,7 +24,7 @@ This atlas covers **both repositories**: the <code>vllm-tt-plugin</code> that Te
 ## Cost model
 
 The plugin adds no per-token compute of its own. Its cost is configuration-time: model registration, mesh construction, and KV-pool sizing happen once per process.
-`model_runner.py` (2,753 lines) and `platform.py` (2,290 lines) are the two files a reviewer watches for growth; AGENTS.md §7 asks new branches there to move to a named neighbour instead.
+`model_runner.py` (2,899 lines) and `platform.py` (2,290 lines) are the two files a reviewer watches for growth; AGENTS.md §7 asks new branches there to move to a named neighbour instead.
 ## Reading order (the atlas chapters)
 
 1. **Entry and configuration** — Two hooks make vLLM notice Tenstorrent; one class answers every question about the hardware. _(adds EP, PF)_
@@ -190,7 +190,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** This is the engine room. It takes the step the scheduler produced, builds the tensors the device expects, runs the model, reads back tokens, and assembles the output structure vLLM asked for.
 
-**How it's built.** class `TTModelRunner` at `src/vllm_tt_plugin/model_runner.py:177` — the largest file in the plugin at 2,753 lines. It owns `get_supported_tasks`, the prefill and decode paths, the sampling handoff (`Sampler` from `vllm.v1.sample.sampler`, line 33), and the output types. `_gather_multi_modal_inputs` (834-903) assembles image features and has no host coverage today. `prompt_logprobs_dict` is hard-coded to `dict.fromkeys(req_ids, None)` at lines 1950 and 2477-2489, which is why the platform refuses `prompt_logprobs` at `platform.py:2179-2180`. The runner also holds the speculative wiring that step 6.1 makes reachable.
+**How it's built.** class `TTModelRunner` at `src/vllm_tt_plugin/model_runner.py:177` — the largest file in the plugin at 2,899 lines. It owns `get_supported_tasks`, the prefill and decode paths, the sampling handoff (`Sampler` from `vllm.v1.sample.sampler`, line 33), and the output types. `_gather_multi_modal_inputs` (834-903) assembles image features and now has host coverage in `tests/test_multimodal_gather.py`. `prompt_logprobs_dict` routes through `_compute_prompt_logprobs_dict` at both output sites (1954, 2613) rather than being hard-coded to `None`; the packing lives in `logprobs.build_prompt_logprobs` and the platform still refuses `prompt_logprobs` at `platform.py:2207-2219`, because the seam is inert in situ — see the Logprobs structure. The runner also holds the speculative wiring that step 6.1 makes reachable.
 
 **Steps in execution.**
 
@@ -202,9 +202,8 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **Questions.**
 
-- **Q-RN1** prompt_logprobs is refused and hard-coded to None. Implementing it needs a tt-metal generator that exposes prompt-position logits — a paired change.
-- **Q-RN2** _gather_multi_modal_inputs has no host test, so the image-only contract is unproven.
-- **Q-RN3** This file is a growth risk: AGENTS.md §7 asks new branches here to move to a named neighbour.
+- **Q-RN1** prompt_logprobs still needs three pieces: a tt-metal generator returning one logits row per prompt position, the two output sites passing that output into the seam, and a per-chunk accumulation for chunked prefill. The refusal stands until all three land.
+- **Q-RN2** This file is a growth risk: AGENTS.md §7 asks new branches here to move to a named neighbour.
 
 #### AD · Async decode
 
@@ -303,7 +302,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** Logprobs tell you how confident the model was. On Tenstorrent they are produced on the device during sampling, which is fast, but has limits on how many you can get at once.
 
-**How it's built.** `src/vllm_tt_plugin/logprobs.py` (81 lines) — `build_logprobs_from_topk()` (line 10) and `build_device_logprobs()` (line 54), the only two packing paths; new logprob features must extend these rather than add a third. Upstream tensors `LogprobsTensors` and `LogprobsLists` are reused. The constraint is recorded in `TTPlatform.compat_sampling_required` (`platform.py:2233-2260`): device logprobs need a multi-device setup and return only the sampled token's logprob, so any `logprobs > 1`, or any logprobs at all on a single device, forces host sampling. Tracked upstream as tt-metal#34077. The device computes top-32; the OpenAI API caps at 20, so `max_logprobs` is clamped at `platform.py:1574-1581` with a warning naming both values.
+**How it's built.** `src/vllm_tt_plugin/logprobs.py` (190 lines) — `build_logprobs_from_topk()` (line 10) and `build_device_logprobs()` (line 54) pack _sampled_ tokens off the device top-32; `build_prompt_logprobs()` and `shift_prompt_target_token_ids()` (lines 84, 158) are the separate **prompt** path, because a prompt position names an arbitrary token rather than the sampled one, so it needs a full log_softmax gather instead of a match against the top-32. That is also why the first two must not be reused here: feeding a prompt token outside the top-32 into `build_logprobs_from_topk` would silently report the rank-0 token's logprob. Upstream tensors `LogprobsTensors` and `LogprobsLists` are reused. The constraint is recorded in `TTPlatform.compat_sampling_required` (`platform.py:2233-2260`): device logprobs need a multi-device setup and return only the sampled token's logprob, so any `logprobs > 1`, or any logprobs at all on a single device, forces host sampling. Tracked upstream as tt-metal#34077. The device computes top-32; the OpenAI API caps at 20, so `max_logprobs` is clamped.
 
 **Steps in execution.**
 
@@ -314,7 +313,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **Questions.**
 
-- **Q-LP1** prompt_logprobs is a different code path entirely: it is refused and hard-coded to None. It needs the prefill-position logits from tt-metal.
+- **Q-LP1** prompt_logprobs is a different code path and is still not served: the packing is written and tested, but both call sites pass no per-position logits into the seam, so the platform refusal is the correct answer. The seam raises rather than returning an empty result.
 
 #### SD · Spec-decode contract
 
@@ -638,13 +637,12 @@ Reference by ID. ✓ resolved (with date) · otherwise open.
 - ~~**Q-WK1**~~ (WK) ✓ Fixed 2026-09-27. `get_model` at worker.py:284 answers it, which fixes both members that build on it transitively.
 - ~~**Q-WK2**~~ (WK) ✓ Added 2026-09-27. `get_punica_wrapper` (platform.py:1429) and the LoRA quartet (worker.py:307-333) each raise by name. They stay unreachable while validate_lora refuses --enable-lora at config time, but a bypassed refusal should fail where the operator can see it rather than as a bare NotImplementedError.
 - ~~**Q-WK3**~~ (WK) ✓ Left absent, decided 2026-09-27. Its docstring says "used in speculative decoding" but the only occurrence in the whole 0.26.0 tree is the definition itself, so an override would be dead code.
-- **Q-RN1** (RN) prompt_logprobs is refused and hard-coded to None. Implementing it needs a tt-metal generator that exposes prompt-position logits — a paired change.
-- **Q-RN2** (RN) _gather_multi_modal_inputs has no host test, so the image-only contract is unproven.
-- **Q-RN3** (RN) This file is a growth risk: AGENTS.md §7 asks new branches here to move to a named neighbour.
+- **Q-RN1** (RN) prompt_logprobs still needs three pieces: a tt-metal generator returning one logits row per prompt position, the two output sites passing that output into the seam, and a per-chunk accumulation for chunked prefill. The refusal stands until all three land.
+- **Q-RN2** (RN) This file is a growth risk: AGENTS.md §7 asks new branches here to move to a named neighbour.
 - **Q-LC1** (LC) get_kv_connector is redundant with the base default (interface.py:248-249). Pre-existing; not removed here because it is an unrelated cleanup.
 - ~~**Q-DP1**~~ (DP) ✓ Yes, reachable, and answered 2026-09-27. The chain is llm_engine.py:202 → :297-299 → core.py:2055 → core.py:921 → executor/abstract.py:250. It is reached by string dispatch, so a missing method was an AttributeError from the worker loop. `TTWorker.execute_dummy_batch` (worker.py:335) now exists and refuses loudly; doing a real dummy forward needs a validated device forward on the mesh, which is a paired tt-metal change.
 - **Q-BO1** (BO) A present capability value that contradicts another resolved property must raise — e.g. block output plus prefix caching, or DiffusionGemma without output_tokens_per_step > 1.
-- **Q-LP1** (LP) prompt_logprobs is a different code path entirely: it is refused and hard-coded to None. It needs the prefill-position logits from tt-metal.
+- **Q-LP1** (LP) prompt_logprobs is a different code path and is still not served: the packing is written and tested, but both call sites pass no per-position logits into the seam, so the platform refusal is the correct answer. The seam raises rather than returning an empty result.
 - **Q-SD1** (SD) On main today the speculative contract is unreachable at runtime. That is the exact condition tests/test_spec_runtime_wiring.py must fail on.
 - **Q-SD2** (SD) The drafter branch, #142, and the int64-seed fix #141 all predate the current branch and must have this work's changes re-applied on top.
 - **Q-UC1** (UC) AGENTS.md §6 lists ten capability keys but three more are consumed in code. The table is incomplete.
