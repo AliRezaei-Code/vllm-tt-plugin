@@ -89,13 +89,6 @@ const STATS = META_FILLED.stats.map((st) =>
 // remember to run.
 // Over the FILLED values, which are what reach the output. Checking the raw
 // imports here would fire on markers that were resolved correctly.
-const emitted = JSON.stringify([NODES_FILLED, CH_FILLED, COST_FILLED, HOW, STATS, DECISIONS, GROUPS, FLOWS_FILLED]);
-if (emitted.includes('{{')) {
-  const leftover = emitted.match(/[^"\\]{0,40}\{\{[^"\\]{0,40}/g) || [];
-  throw new Error(
-    `build: unfilled marker(s) reached the output: ${[...new Set(leftover)].join(' | ')}`,
-  );
-}
 
 // ---------- shared helpers ----------
 const Q = (c) => (typeof c === 'string' ? { q: c } : c);
@@ -120,15 +113,15 @@ NODES_FILLED.forEach((n) => (n.cond || []).map(Q).forEach((c) => (c.r || c.to ? 
 function buildSystemMd() {
   const out = [];
   out.push(`# ${META.title} — System Definition`, '');
-  out.push(META.intro, '');
+  out.push(META_FILLED.intro, '');
   out.push(`_Question status: **${cnt.open} open · ${cnt.res} resolved**._`, '');
-  out.push('## One paragraph', '', META.onePara, '');
+  out.push('## One paragraph', '', META_FILLED.onePara, '');
   out.push('## Decisions locked', '', '| Axis | Decision | ADR |', '|---|---|---|');
   DECISIONS.forEach((d) => out.push(`| ${d.axis} | ${d.decision} | ${d.adr} |`));
   out.push('');
   out.push('## Cost model', '');
   COST_FILLED.forEach((l) => out.push(l));
-  if (META.deepDive) out.push('## Deep dives', '', META.deepDive, '');
+  if (META_FILLED.deepDive) out.push('## Deep dives', '', META_FILLED.deepDive, '');
   out.push('## Reading order (the atlas chapters)', '');
   CH_FILLED.forEach((c, i) => out.push(`${i + 1}. **${c.title}** — ${md(c.lede)}${c.reveal.length ? ` _(adds ${c.reveal.join(', ')})_` : ''}`));
   out.push('');
@@ -167,8 +160,8 @@ function buildSystemMd() {
   out.push('## Questions — index', '', 'Reference by ID. ✓ resolved (with date) · otherwise open.', '');
   index.forEach(([id, code, c]) => out.push(c.r ? `- ~~**${id}**~~ (${code}) ✓ ${md(c.r)}` : `- **${id}** (${code}) ${md(c.q)}`));
   out.push('');
-  if (META.platformGives || META.weOwn) out.push('## What the platform gives vs what we own', '', `**Platform gives:** ${META.platformGives||''}`, '', `**We own:** ${META.weOwn||''}`, '');
-  if (META.filesystem) out.push('## Planned filesystem', '', '```', META.filesystem.trimEnd(), '```', '');
+  if (META_FILLED.platformGives || META_FILLED.weOwn) out.push('## What the platform gives vs what we own', '', `**Platform gives:** ${META_FILLED.platformGives||''}`, '', `**We own:** ${META_FILLED.weOwn||''}`, '');
+  if (META_FILLED.filesystem) out.push('## Planned filesystem', '', '```', META_FILLED.filesystem.trimEnd(), '```', '');
   out.push('## How this file is maintained', '', `Generated from \`${META.sourcePath||'atlas/data.mjs'}\` by \`${META.buildCmd||'bun atlas/build.mjs'}\`, which also builds the interactive atlas (\`atlas.html\`${META.artifactUrl?`, published at ${META.artifactUrl}`:''}). Edit the data file, rebuild, republish — never edit this file by hand.`, '');
   return out.join('\n');
 }
@@ -189,6 +182,25 @@ function buildAtlasHtml() {
   return tpl.replace('__TITLE__', META.title + ' Atlas').replace('/*__DATA__*/', data + `\nconst STATS = ${JSON.stringify(STATS||[])};\nconst TITLE = ${JSON.stringify(META.title||'System')};`);
 }
 
-writeFileSync(join(outDir, 'SYSTEM.md'), buildSystemMd());
-writeFileSync(join(outDir, 'atlas.html'), buildAtlasHtml());
+const systemMd = buildSystemMd();
+const atlasHtml = buildAtlasHtml();
+
+// Totality check, on the two documents rather than on the filled structures.
+// Asserting over the copies cannot catch a field that no builder reads -- and
+// that is precisely the miss this exists to prevent: META.intro and four
+// siblings were being filled into META_FILLED that nothing consulted, so a
+// marker in them reached SYSTEM.md with the guard green. Checking the emitted
+// text cannot tell the difference, because by that point the only question is
+// whether a `{{` made it into a file the reader will open.
+for (const [name, text] of [['SYSTEM.md', systemMd], ['atlas.html', atlasHtml]]) {
+  if (text.includes('{{')) {
+    const hits = text.match(/[^\n]{0,60}\{\{[^\n]{0,60}/g) || [];
+    throw new Error(
+      `build: unfilled marker reached ${name}: ${[...new Set(hits)].join(' | ')}`,
+    );
+  }
+}
+
+writeFileSync(join(outDir, 'SYSTEM.md'), systemMd);
+writeFileSync(join(outDir, 'atlas.html'), atlasHtml);
 console.log(`built SYSTEM.md + atlas.html · ${cnt.open} open · ${cnt.res} resolved · ${NODES.length} structures · ${DECISIONS.length} decisions`);
