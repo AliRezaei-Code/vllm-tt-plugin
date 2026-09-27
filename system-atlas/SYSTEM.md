@@ -24,7 +24,7 @@ This atlas covers **both repositories**: the <code>vllm-tt-plugin</code> that Te
 ## Cost model
 
 The plugin adds no per-token compute of its own. Its cost is configuration-time: model registration, mesh construction, and KV-pool sizing happen once per process.
-`model_runner.py` (2,753 lines) and `platform.py` (2,260 lines) are the two files a reviewer watches for growth; AGENTS.md §7 asks new branches there to move to a named neighbour instead.
+`model_runner.py` (2,753 lines) and `platform.py` (2,290 lines) are the two files a reviewer watches for growth; AGENTS.md §7 asks new branches there to move to a named neighbour instead.
 ## Reading order (the atlas chapters)
 
 1. **Entry and configuration** — Two hooks make vLLM notice Tenstorrent; one class answers every question about the hardware. _(adds EP, PF)_
@@ -344,7 +344,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** vLLM does not promise stability on its internals, and this plugin depends on a lot of them. This is the honest inventory of the bindings, so a version bump is a checklist rather than a surprise.
 
-**How it's built.** Derived with `grep -rnE "^\s*(from|import)\s+vllm" src/` per the repo's own playbook (`.github/prompts/vllm-upgrade-assessment.prompt.md:53-115`). Subclassed bases: `TTPlatform(Platform)`, `TTWorker(WorkerBase)`, `TTScheduler(AsyncScheduler)`, `TTLaneCoordinator(SchedulerInterface)`, `TTModelLoader(BaseModelLoader)`, `DeferredDecodeOutput`/`AsyncTTModelRunnerOutput(AsyncModelRunnerOutput)`, `TTLaunchPlan(EngineLaunchPlan)`, `TTCoreEngineLauncher(CoreEngineLauncher)`. Constructed upstream dataclasses: `ModelRunnerOutput`, `SchedulerOutput`, `SamplingMetadata`, `CachedRequestState`, `MultiGroupBlockTable` and the KV cache specs. The `model_capabilities` keys the plugin actually reads go beyond the AGENTS.md §6 table: that table lists ten, and `tt_block_kv_extent_tokens`, `supports_device_penalties` and `fabric_config` are consumed in code but absent from it. The per-member matrix for every coupled symbol — plugin site, base behaviour, and whether it is called unconditionally — is not committed here; it is re-derived per version bump using the playbook above, which is the point of the playbook.
+**How it's built.** Derived with `grep -rnE "^\s*(from|import)\s+vllm" src/` per the repo's own playbook (`.github/prompts/vllm-upgrade-assessment.prompt.md:53-115`). Subclassed bases: `TTPlatform(Platform)`, `TTWorker(WorkerBase)`, `TTScheduler(AsyncScheduler)`, `TTLaneCoordinator(SchedulerInterface)`, `TTModelLoader(BaseModelLoader)`, `DeferredDecodeOutput`/`AsyncTTModelRunnerOutput(AsyncModelRunnerOutput)`, `TTLaunchPlan(EngineLaunchPlan)`, `TTCoreEngineLauncher(CoreEngineLauncher)`. Constructed upstream dataclasses: `ModelRunnerOutput`, `SchedulerOutput`, `SamplingMetadata`, `CachedRequestState`, `LogprobsTensors`, `KVCacheConfig` and specs, `EngineCoreOutputs`, `GrammarOutput`, `SchedulerStats`, `MultiGroupBlockTable(...)`. Seven runtime monkeypatches in `platform.py` at lines 625, 685, 731, 798, 864, 885, 945. Seven internal `additional_config` keys. Ten `model_capabilities` keys — note that `tt_block_kv_extent_tokens`, `supports_device_penalties` and `fabric_config` are consumed in code but are missing from the AGENTS.md §6 table. The per-member matrix for every coupled symbol — plugin site, base behaviour, and whether it is called unconditionally — is not committed here; it is re-derived per version bump using the playbook above, which is the point of the playbook.
 
 **Steps in execution.**
 
@@ -364,7 +364,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** Ask for something Tenstorrent cannot do and you get a clear error naming the flag you typed, at startup, instead of a wrong answer later or an AttributeError from deep inside vLLM.
 
-**How it's built.** `src/vllm_tt_plugin/feature_support.py`, one `validate_<feature>(cls, vllm_config)` per feature, called in a fixed sequence from `_apply_check_and_update_config` (`platform.py:1560`) at the point the three `assert`s used to sit (1561-1568). It is a separate module because `platform.py` is already 2,260 lines and AGENTS.md §7 says a new conditional branch there is a prompt to split into a neighbour; `config.py` is the accessor layer, not a validator, so a purpose-named module is the smaller change. Every function raises `ValueError` printing the offending value and naming the CLI flag — never `assert`, which `python -O` removes (AGENTS.md §2.4).
+**How it's built.** `src/vllm_tt_plugin/feature_support.py`, one `validate_<feature>(cls, vllm_config)` per feature, called in a fixed sequence from `_apply_check_and_update_config` (`platform.py:1560`) at the point the three `assert`s used to sit (1561-1568). It is a separate module because `platform.py` is already 2,290 lines and AGENTS.md §7 says a new conditional branch there is a prompt to split into a neighbour; `config.py` is the accessor layer, not a validator, so a purpose-named module is the smaller change. Every function raises `ValueError` printing the offending value and naming the CLI flag — never `assert`, which `python -O` removes (AGENTS.md §2.4).
 
 **Steps in execution.**
 
