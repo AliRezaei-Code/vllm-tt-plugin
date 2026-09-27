@@ -567,9 +567,15 @@ survive `python -O`.
   generator corrects them itself.
 - Where chunked prefill is active, multimodal inputs are never split across a
   chunk boundary.
-- Prompt logprobs are rejected at request validation time. The tt-metal
-  generator returns logits for the final prompt position only, so serving this
-  needs a paired tt-metal change.
+- Prompt logprobs are rejected at request validation time. The plugin-side
+  work is done: the request is carried through the batch, and the shift,
+  top-K packing and tie-ranking match upstream's `PromptLogprobsWorker`. Two
+  things are still missing, both outside this repository. The tt-metal
+  generator returns logits for the final prompt position only, so there is
+  nothing to read; and the seam covers an unchunked prefill only, so a request
+  resuming mid-prompt under `--enable-chunked-prefill` is refused rather than
+  answered. Serving the feature needs a tt-metal generator that returns one
+  logits row per prompt position, and a per-chunk accumulation in the runner.
 - Prefix caching is enabled only for models that declare TT support for it.
 - Async decode overlap is enabled only for models that declare the capability.
 - Multi-host MPI data parallelism is not supported.

@@ -307,6 +307,15 @@ def test_apply_sampled_token_updates_request_state():
     runner._build_runner_output = lambda **kwargs: TTModelRunner._build_runner_output(
         runner, **kwargs
     )
+    # `_build_runner_output` routes prompt logprobs through this method. The
+    # real batch needs no setup here: its default num_prompt_logprobs is the
+    # "not requested" sentinel, so prompt_logprobs_requested is already False.
+    runner._compute_prompt_logprobs_dict = (
+        lambda req_ids,
+        prompt_logits_by_req=None: TTModelRunner._compute_prompt_logprobs_dict(
+            runner, req_ids, prompt_logits_by_req
+        )
+    )
 
     output = TTModelRunner.apply_and_build_runner_output(
         runner,

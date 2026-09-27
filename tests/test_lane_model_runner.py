@@ -308,6 +308,15 @@ def test_finish_lane_sync_suppresses_intermediate_prefill_output():
         return TTModelRunner._build_chunked_prefill_output(runner, **kwargs)
 
     runner._build_chunked_prefill_output = build_chunked_prefill_output
+    # `_build_chunked_prefill_output` routes prompt logprobs through this
+    # method; the stub lane batch has no request asking for them.
+    runner.input_batch = SimpleNamespace(prompt_logprobs_requested=False)
+    runner._compute_prompt_logprobs_dict = (
+        lambda req_ids,
+        prompt_logits_by_req=None: TTModelRunner._compute_prompt_logprobs_dict(
+            runner, req_ids, prompt_logits_by_req
+        )
+    )
 
     output = TTModelRunner._finish_lane_sync(
         runner,

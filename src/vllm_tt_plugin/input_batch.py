@@ -50,6 +50,14 @@ SEED_NONE_SENTINEL = -1
 LOGPROBS_NONE_SENTINEL = -2
 
 
+# Sentinel for prompt_logprobs=None (not requested). 0 is a real request --
+# "report the target token's logprob and no alternatives" -- and -1 means
+# "all vocab", so neither can mark the absent case. Same reasoning as
+# LOGPROBS_NONE_SENTINEL above, kept separate because the two settings are
+# read independently.
+PROMPT_LOGPROBS_NONE_SENTINEL = -2
+
+
 def build_cached_request_state(new_req_data) -> CachedRequestState:
     """Build a ``CachedRequestState`` for one newly-scheduled request.
 
@@ -132,6 +140,7 @@ class SamplingInputBatch:
         "repetition_penalty": 1.0,
         "seed": SEED_NONE_SENTINEL,  # Sentinel represents None (no seed)
         "num_logprobs": LOGPROBS_NONE_SENTINEL,
+        "num_prompt_logprobs": PROMPT_LOGPROBS_NONE_SENTINEL,
     }
 
     def __init__(self, max_num_reqs: int, logitsprocs: LogitsProcessors | None = None):
@@ -147,6 +156,7 @@ class SamplingInputBatch:
         self.repetition_penalty = default_tensors["repetition_penalty"]
         self.seed = default_tensors["seed"]
         self.num_logprobs = default_tensors["num_logprobs"]
+        self.num_prompt_logprobs = default_tensors["num_prompt_logprobs"]
         # Asserting that all defaults have corresponding attributes.
         for name in self.DEFAULTS:
             assert hasattr(self, name), (
@@ -462,6 +472,19 @@ class InputBatch:
         else:
             self.sampling.num_logprobs[req_index] = LOGPROBS_NONE_SENTINEL
 
+        # Prompt logprobs are a per-request setting, not a sampling knob, but
+        # they live beside num_logprobs because both answer the same question
+        # ("how much of the distribution should this request see?") and share
+        # the same slot lifecycle. -1 means all vocab and is kept as-is, not
+        # remapped to vocab_size: build_prompt_logprobs reads the flag to decide
+        # whether to emit every column.
+        if sampling_params.prompt_logprobs is None:
+            self.sampling.num_prompt_logprobs[req_index] = PROMPT_LOGPROBS_NONE_SENTINEL
+        else:
+            self.sampling.num_prompt_logprobs[req_index] = (
+                sampling_params.prompt_logprobs
+            )
+
         # Allowed token IDs
         if sampling_params.allowed_token_ids:
             self.sampling.has_allowed_token_ids.add(req_id)
@@ -509,6 +532,9 @@ class InputBatch:
         # Clean up host-only sampling param tracking
         self.sampling.generators.pop(req_index, None)
         self.sampling.has_allowed_token_ids.discard(req_id)
+        # Clear the slot's prompt-logprob request so a stale one cannot survive
+        # into a request that later reuses this index.
+        self.sampling.num_prompt_logprobs[req_index] = PROMPT_LOGPROBS_NONE_SENTINEL
         self.sampling.bad_words_token_ids.pop(req_index, None)
         # Clear the allowlist mask row so a stale "disallowed" set can never
         # survive into a request that later reuses this slot.
@@ -585,6 +611,9 @@ class InputBatch:
             sampling.repetition_penalty[empty_index] = sampling.repetition_penalty[
                 last_req_index
             ]
+            sampling.num_prompt_logprobs[empty_index] = sampling.num_prompt_logprobs[
+                last_req_index
+            ]
             sampling.seed[empty_index] = sampling.seed[last_req_index]
             sampling.num_logprobs[empty_index] = sampling.num_logprobs[last_req_index]
 
@@ -621,6 +650,23 @@ class InputBatch:
         if max_val < 0:
             return None
         return max_val
+
+    @property
+    def prompt_logprobs_requested(self) -> bool:
+        """True when any live request asked for prompt logprobs."""
+        if self.num_reqs == 0:
+            return False
+        return bool(
+            (self.sampling.num_prompt_logprobs[: self.num_reqs] >= 0).any().item()
+        )
+
+    def requested_prompt_logprobs(self, req_index: int) -> int:
+        """The ``prompt_logprobs`` value for ``req_index``, or the sentinel.
+
+        ``-1`` means the whole vocabulary; any other non-negative value is the
+        number of alternatives to report beside the target token.
+        """
+        return int(self.sampling.num_prompt_logprobs[req_index].item())
 
     @property
     def no_allowed_token_ids(self) -> bool:

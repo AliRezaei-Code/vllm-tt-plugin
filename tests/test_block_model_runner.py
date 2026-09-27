@@ -25,6 +25,20 @@ def _bind_committed_width(runner: SimpleNamespace) -> SimpleNamespace:
     runner._tt_committed_width = lambda toks: TTModelRunner._tt_committed_width(
         runner, toks
     )
+    # `_build_runner_output` also routes prompt logprobs through
+    # `_compute_prompt_logprobs_dict`. Stubs that carry an `input_batch`
+    # describe a batch where no request asked for prompt logprobs, so binding
+    # the real method keeps the "did anyone ask?" check under test rather than
+    # stubbed away. Stubs for `_get_output_tokens` have no batch at all.
+    batch = getattr(runner, "input_batch", None)
+    if batch is not None:
+        batch.prompt_logprobs_requested = False
+        runner._compute_prompt_logprobs_dict = (
+            lambda req_ids,
+            prompt_logits_by_req=None: TTModelRunner._compute_prompt_logprobs_dict(
+                runner, req_ids, prompt_logits_by_req
+            )
+        )
     return runner
 
 

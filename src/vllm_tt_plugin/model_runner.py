@@ -59,7 +59,11 @@ from vllm_tt_plugin.input_batch import (
 from vllm_tt_plugin.lane_scheduler import get_tt_step_plan
 from vllm_tt_plugin.loader import TTModelLoader
 from vllm_tt_plugin.logger import init_tt_logger
-from vllm_tt_plugin.logprobs import build_device_logprobs
+from vllm_tt_plugin.logprobs import (
+    build_device_logprobs,
+    build_prompt_logprobs,
+    shift_prompt_target_token_ids,
+)
 from vllm_tt_plugin.model_input import (
     TTModelInput,
     TTSamplingParams,
@@ -1947,7 +1951,7 @@ class TTModelRunner:
             ),
             sampled_token_ids=sampled_token_id_lists,
             logprobs=logprobs,
-            prompt_logprobs_dict=dict.fromkeys(req_ids, None),
+            prompt_logprobs_dict=self._compute_prompt_logprobs_dict(req_ids),
             pooler_output=[],
         )
         if defer_state_apply and final_tokens is not None:
@@ -2448,6 +2452,137 @@ class TTModelRunner:
         ]
         logits.masked_fill_(unpacked_bitmask, -float("inf"))
 
+    def _compute_prompt_logprobs_dict(
+        self,
+        req_ids: list[str],
+        prompt_logits_by_req: dict[str, torch.Tensor] | None = None,
+    ) -> dict[str, LogprobsTensors | None]:
+        """Per-request prompt logprobs for ``req_ids``, or ``None`` for each.
+
+        The common answer is "no request asked", and that is what the
+        ``dict.fromkeys`` default expresses; upstream treats a missing key and
+        a ``None`` value the same way.
+
+        ``prompt_logits_by_req`` maps a request id to its per-prompt-position
+        prefill logits, shaped ``[num_positions, vocab_size]``. The caller must
+        supply **one logits row per prefilled position**: for an unchunked
+        prompt that is one row more than there are reportable positions, and
+        the trailing row is trimmed here because it predicts the first
+        generated token rather than a prompt token.
+
+        It is the tt-metal seam. A generator that returns logits at every
+        prompt position, rather than only the final one, can pass them here
+        and this method produces the full result. A generator that returns
+        only the final position supplies a single row, which leaves no
+        position with a prompt target and is reported as a `ValueError` rather
+        than as a silent `None` -- a caller that asked for a distribution and
+        received `None` has been told nothing. The one genuine `None` is a
+        prompt of a single token, which has no following token to report on.
+        The seam covers an **unchunked prefill only**. A request resuming
+        mid-prompt is refused rather than answered, because upstream computes
+        each chunk's logprobs against `num_computed_tokens + 1 + i` and
+        concatenates the pieces; chunked prefill is on by default, so that case
+        is common rather than exotic.
+
+        Config-time refusal in ``TTPlatform.validate_request`` means no
+        request can reach here on the current backend, so these raises guard a
+        direct ``EngineCoreRequest`` that bypassed the frontend.
+        """
+        if not self.input_batch.prompt_logprobs_requested:
+            return dict.fromkeys(req_ids, None)
+        if prompt_logits_by_req is None:
+            raise ValueError(
+                "prompt_logprobs were requested, but this step carried no "
+                "per-prompt-position prefill logits. The tt-metal generator "
+                "returns logits for the final prompt position only, and "
+                "prompt_logprobs needs every prompt position. Serving them "
+                "needs a paired tt-metal change that returns per-position "
+                "prefill logits; until that lands the config-time refusal in "
+                "TTPlatform.validate_request is the supported answer."
+            )
+
+        result: dict[str, LogprobsTensors | None] = {}
+        for req_id in req_ids:
+            req_index = self.input_batch.req_id_to_index.get(req_id)
+            if req_index is None:
+                result[req_id] = None
+                continue
+            requested = self.input_batch.requested_prompt_logprobs(req_index)
+            if requested < 0:
+                result[req_id] = None
+                continue
+            logits = prompt_logits_by_req.get(req_id)
+            if logits is None:
+                raise ValueError(
+                    f"prompt_logprobs were requested for {req_id} but no "
+                    f"per-prompt-position logits were supplied for it. "
+                    f"Supplied: {sorted(prompt_logits_by_req)}"
+                )
+            num_prompt_tokens = int(self.input_batch.num_prompt_tokens[req_index])
+            # This seam handles a prompt prefilled in one pass. Upstream splits a
+            # chunked prompt across steps, computes logprobs per chunk against
+            # `num_computed_tokens + 1 + i`, and concatenates the pieces
+            # (`PromptLogprobsWorker.in_progress_prompt_logprobs`). Chunked
+            # prefill is on by default, so a request resuming at position k > 0
+            # reaches here: reading from offset 1 would report position k's
+            # target against position 0's logits. Refuse rather than answer.
+            num_computed = int(self.input_batch.num_computed_tokens_cpu[req_index])
+            if num_computed > 0:
+                raise ValueError(
+                    f"prompt_logprobs were requested for {req_id}, which is "
+                    f"resuming at position {num_computed} of a "
+                    f"{num_prompt_tokens}-token prompt. This seam computes "
+                    f"prompt logprobs only for a prompt prefilled in one pass; "
+                    f"a chunked prompt needs upstream's per-chunk accumulation "
+                    f"against num_computed_tokens. Pass "
+                    f"--no-enable-chunked-prefill, or wait for the seam to grow "
+                    f"the chunked path."
+                )
+            token_ids = torch.from_numpy(
+                self.input_batch.token_ids_cpu[req_index, :num_prompt_tokens].astype(
+                    np.int64, copy=False
+                )
+            )
+            # The whole prompt is being prefilled in one chunk here, so the
+            # final position (which predicts the first generated token) is
+            # dropped, matching upstream's `end_idx -= 1` for unchunked
+            # prompts.
+            targets = shift_prompt_target_token_ids(
+                token_ids,
+                num_computed_tokens=0,
+                prompt_len=num_prompt_tokens,
+                num_scheduled_tokens=logits.shape[0],
+                prompt_chunked=False,
+            )
+            if targets.shape[0] == 0:
+                if num_prompt_tokens <= 1:
+                    # A one-token prompt has no following token, so there is
+                    # genuinely nothing to report.
+                    result[req_id] = None
+                    continue
+                raise ValueError(
+                    f"prompt_logprobs were requested for {req_id}, whose prompt "
+                    f"is {num_prompt_tokens} token(s), but only "
+                    f"{logits.shape[0]} prefill logit row(s) arrived. A prompt "
+                    f"logprob reports the token that follows each position, so "
+                    f"a generator returning only the final position cannot "
+                    f"serve this. That needs the paired tt-metal change; until "
+                    f"it lands the config-time refusal in "
+                    f"TTPlatform.validate_request is the supported answer."
+                )
+            # A generator returns one logits row per prefilled position, so an
+            # unchunked prompt arrives with exactly one row more than there are
+            # reportable positions. Upstream drops that trailing row the same
+            # way (`end_idx -= 1`); it predicts the first generated token, not
+            # a prompt token. `num_scheduled_tokens` is the row count, so the
+            # slice below can only ever trim, never run past the end.
+            result[req_id] = build_prompt_logprobs(
+                logits=logits[: targets.shape[0]],
+                target_token_ids=targets,
+                num_prompt_logprobs=requested,
+            )
+        return result
+
     def _build_runner_output(
         self,
         sampled_token_ids: torch.Tensor,
@@ -2474,8 +2609,10 @@ class TTModelRunner:
         if sampled_token_ids_np.dtype != np.int32:
             sampled_token_ids_np = sampled_token_ids_np.astype(np.int32, copy=False)
 
-        prompt_logprobs_dict: dict[str, LogprobsTensors | None] = dict.fromkeys(
-            (output_req_ids[i] for i in range(num_reqs)), None
+        prompt_logprobs_dict: dict[str, LogprobsTensors | None] = (
+            self._compute_prompt_logprobs_dict(
+                [output_req_ids[i] for i in range(num_reqs)]
+            )
         )
         sampled_token_id_lists = [
             [int(token_id) for token_id in row] for row in sampled_token_ids_np.tolist()
