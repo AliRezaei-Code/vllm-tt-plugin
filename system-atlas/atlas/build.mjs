@@ -26,6 +26,41 @@ const suiteSentence = [
   .filter(Boolean)
   .join(', ');
 
+// Fill a {{LINES:path}} marker, or fail. A marker naming a file the
+// measurement does not know about is a typo, and silently emitting 0 would
+// put a wrong number into prose that reads as measured.
+const fill = (str) => {
+  if (typeof str !== 'string') return str;
+  return str.replace(/\{\{LINES:([\w./]+)\}\}/g, (_, file) => {
+    const n = m.lines[file];
+    if (n === undefined) {
+      throw new Error(
+        `build: no measured line count for "${file}". data.mjs names a file ` +
+          'the measurement does not know about.',
+      );
+    }
+    // Grouped, so prose reads the same as the hand-written numbers it replaces.
+    return n.toLocaleString('en-US');
+  });
+};
+
+// NODES, CH and the cost model carry line counts in their prose too, so the
+// markers are filled there too. Fixing only the size table would leave the
+// next stale copy of the same number already committed.
+const filledCond = (c) =>
+  typeof c === 'string' ? fill(c) : { ...c, q: fill(c.q), r: fill(c.r), to: fill(c.to) };
+const NODES_FILLED = NODES.map((n) => ({
+  ...n,
+  one: fill(n.one),
+  what: fill(n.what),
+  how: fill(n.how),
+  steps: fill(n.steps),
+  cond: (n.cond || []).map(filledCond),
+  story: fill(n.story),
+}));
+const CH_FILLED = CH.map((c) => ({ ...c, lede: fill(c.lede), story: fill(c.story) }));
+const COST_FILLED = META.costModel.map(fill);
+
 const HOW = HOW_HTML.replace('{{SIZE_TABLE}}', m.sizeTable).replace(
   '{{TESTS}}',
   `${suiteSentence} across ${m.testModules} test modules under <code>tests/</code> ` +
@@ -58,7 +93,7 @@ const md = (s) =>
     .trim();
 const groupTitle = Object.fromEntries(GROUPS.map((g) => [g.id, g.title]));
 const cnt = { open: 0, res: 0 };
-NODES.forEach((n) => (n.cond || []).map(Q).forEach((c) => (c.r || c.to ? cnt.res++ : cnt.open++)));
+NODES_FILLED.forEach((n) => (n.cond || []).map(Q).forEach((c) => (c.r || c.to ? cnt.res++ : cnt.open++)));
 
 // ---------- SYSTEM.md ----------
 function buildSystemMd() {
@@ -71,16 +106,16 @@ function buildSystemMd() {
   DECISIONS.forEach((d) => out.push(`| ${d.axis} | ${d.decision} | ${d.adr} |`));
   out.push('');
   out.push('## Cost model', '');
-  META.costModel.forEach((l) => out.push(l));
+  COST_FILLED.forEach((l) => out.push(l));
   if (META.deepDive) out.push('## Deep dives', '', META.deepDive, '');
   out.push('## Reading order (the atlas chapters)', '');
-  CH.forEach((c, i) => out.push(`${i + 1}. **${c.title}** — ${md(c.lede)}${c.reveal.length ? ` _(adds ${c.reveal.join(', ')})_` : ''}`));
+  CH_FILLED.forEach((c, i) => out.push(`${i + 1}. **${c.title}** — ${md(c.lede)}${c.reveal.length ? ` _(adds ${c.reveal.join(', ')})_` : ''}`));
   out.push('');
   out.push('## Structures', '');
   const index = [];
   for (const g of GROUPS) {
     out.push(`### ${g.title}${g.id === 'off' ? ' (designed for, not built)' : ''}`, '');
-    for (const n of NODES.filter((n) => n.group === g.id)) {
+    for (const n of NODES_FILLED.filter((n) => n.group === g.id)) {
       out.push(`#### ${n.code} · ${n.name}${n.ghost ? ' _(not switched on)_' : ''}`, '');
       out.push(`**In one line.** ${md(n.one)}`, '');
       out.push(`**What it does.** ${md(n.what)}`, '');
@@ -123,9 +158,9 @@ function buildAtlasHtml() {
   const decisionsHtml = DECISIONS.map((d) => `<li><b>${d.axis}.</b> ${md(d.decision).replace(/\*\*(.*?)\*\*/g, '<b>$1</b>').replace(/`(.*?)`/g, '<code>$1</code>').replace(/\[(.*?)\]\((.*?)\)/g, '$1')}</li>`).join('');
   const data = [
     `const GROUPS = ${JSON.stringify(GROUPS)};`,
-    `const NODES = ${JSON.stringify(NODES)};`,
+    `const NODES = ${JSON.stringify(NODES_FILLED)};`,
     `const FLOWS = ${JSON.stringify(FLOWS)};`,
-    `const CH = ${JSON.stringify(CH)};`,
+    `const CH = ${JSON.stringify(CH_FILLED)};`,
     `const HOW_HTML = ${JSON.stringify(HOW)};`,
     `const DECISIONS_HTML = ${JSON.stringify(decisionsHtml)};`,
   ].join('\n');

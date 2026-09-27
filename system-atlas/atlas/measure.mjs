@@ -188,6 +188,10 @@ export function measure(repoRoot) {
     total,
     totalLabel: `${(total / 1000).toFixed(1)}k`,
     sizeTable: rows.join('\n'),
+    // Keyed by the path as written in data.mjs, so a marker can name the file
+    // it is talking about. The size table is only a reading aid; this is what
+    // the prose uses when it says "2,899 lines" about a specific module.
+    lines: Object.fromEntries(sizes.map(({ name, n }) => [name, n])),
     suite,
     testModules: testFiles.length,
   };
