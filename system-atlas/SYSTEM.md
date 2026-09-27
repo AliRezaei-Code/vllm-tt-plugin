@@ -228,7 +228,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** Lane-DP gives you data parallelism without several processes: one engine, several independent copies of the model and its KV cache, all driven from a single scheduler that merges their work into one device call.
 
-**How it's built.** class `TTLaneCoordinator(SchedulerInterface)` at `src/vllm_tt_plugin/lane_scheduler.py:242`. It owns one fully independent `TTScheduler` per lane and implements the whole abstract interface (`interface.py:35-252`). `get_tt_step_plan()` produces a `TTStepPlan` that the runner consumes. `get_kv_connector()` (815) returns `None` — which is byte-identical to the `SchedulerInterface` default at `interface.py:248-249`, so the override is redundant. Lane folding is a Galaxy generator-version check plus an identity test on `model_class.__name__ == "GptOssForCausalLM"`; AGENTS.md §6 records that as leftover identity gating not to be copied.
+**How it's built.** class `TTLaneCoordinator(SchedulerInterface)` at `src/vllm_tt_plugin/lane_scheduler.py:242`. It owns one fully independent `TTScheduler` per lane and implements the whole abstract interface (`interface.py:37-254`). `get_tt_step_plan()` produces a `TTStepPlan` that the runner consumes. `get_kv_connector()` (815) returns `None` — which is byte-identical to the `SchedulerInterface` default at `interface.py:248-249`, so the override is redundant. Lane folding is a Galaxy generator-version check plus an identity test on `model_class.__name__ == "GptOssForCausalLM"`; AGENTS.md §6 records that as leftover identity gating not to be copied.
 
 **Steps in execution.**
 
@@ -509,7 +509,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** The GPU implementation. It shows which optional methods exist in practice and what they do — LoRA, sleep, dummy batches — so you can see which ones a plugin is declining rather than missing.
 
-**How it's built.** `vllm/v1/worker/gpu_worker.py` at v0.26.0, 1453 lines. Implements `get_model` (929), the four LoRA methods (add_lora 1237, remove_lora 1240, list_loras 1243, pin_lora 1246, one-line delegations to the model runner), `execute_dummy_batch` (1233, sized by `model_runner.uniform_decode_query_len`), `sleep(level)` (192) and `wake_up(tags)` (227) — the last three absent from `WorkerBase` entirely. `TTWorker` mirrors the first group and omits only `sleep` and `wake_up`, which cannot be reached on TT because `ModelConfig.__post_init__` already refuses `--enable-sleep-mode` for any non-CUDA/ROCm/XPU platform; the LoRA quartet and `execute_dummy_batch` are present and refuse by name. **Substituted by** `TTWorker` (`worker.py:183`): a mesh device instead of a GPU, a tt-metal generator instead of vLLM layers, and no profiling run.
+**How it's built.** `vllm/v1/worker/gpu_worker.py` at v0.26.0, 1453 lines. Implements `get_model` (929), the four LoRA methods (add_lora 1237, remove_lora 1240, list_loras 1243, pin_lora 1246, one-line delegations to the model runner), `execute_dummy_batch` (1233, sized by `model_runner.uniform_decode_query_len`), `sleep(level)` (192) and `wake_up(tags)` (227) — the last three absent from `WorkerBase` entirely. `TTWorker` mirrors the first group and omits only `sleep` and `wake_up`, which cannot be reached on TT because `ModelConfig.__post_init__` already refuses `--enable-sleep-mode` for any non-CUDA/ROCm/XPU platform; the LoRA quartet and `execute_dummy_batch` are present and refuse by name. **Substituted by** `TTWorker` (`worker.py:184`): a mesh device instead of a GPU, a tt-metal generator instead of vLLM layers, and no profiling run.
 
 **Steps in execution.**
 
@@ -527,7 +527,7 @@ The plugin adds no per-token compute of its own. Its cost is configuration-time:
 
 **What it does.** The counterpart TTModelRunner replaces. It builds the batch tensors, runs the model, samples, and assembles the output structure the engine expects.
 
-**How it's built.** `vllm/v1/worker/gpu_model_runner.py` at v0.26.0, 7846 lines. Owns `get_supported_generation_tasks` and `get_supported_pooling_tasks` (3309, 3327) — the members that decide what a model can be asked to do, and where `runner_type` becomes visible. It is also the file whose churn the plugin insulates itself from by reimplementing `InputBatch` rather than subclassing `gpu_input_batch.InputBatch`. **Substituted by** `TTModelRunner` (`model_runner.py:177`): a tt-metal generator instead of vLLM model layers, over a persistent `InputBatch` rather than a per-step rebuild.
+**How it's built.** `vllm/v1/worker/gpu_model_runner.py` at v0.26.0, 7846 lines. Owns `get_supported_generation_tasks` and `get_supported_pooling_tasks` (3309, 3327) — the members that decide what a model can be asked to do, and where `runner_type` becomes visible. It is also the file whose churn the plugin insulates itself from by reimplementing `InputBatch` rather than subclassing `gpu_input_batch.InputBatch`. **Substituted by** `TTModelRunner` (`model_runner.py:181`): a tt-metal generator instead of vLLM model layers, over a persistent `InputBatch` rather than a per-step rebuild.
 
 **Steps in execution.**
 
