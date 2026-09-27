@@ -44,22 +44,27 @@ const fill = (str) => {
   });
 };
 
+// A recursive walk, not a list of field names. The enumerated version named
+// one/what/how/steps/cond/story/lede and silently missed `flow` and META's
+// intro/onePara/platformGives/weOwn/filesystem, so a marker dropped into one of
+// those tomorrow would keep its hand-written number and nothing would say so.
+// Walking every string cannot be incomplete by construction.
+const deep = (o) => {
+  if (Array.isArray(o)) return o.map(deep);
+  if (o && typeof o === 'object') {
+    return Object.fromEntries(Object.entries(o).map(([k, v]) => [k, deep(v)]));
+  }
+  return typeof o === 'string' ? fill(o) : o;
+};
+
 // NODES, CH and the cost model carry line counts in their prose too, so the
 // markers are filled there too. Fixing only the size table would leave the
 // next stale copy of the same number already committed.
-const filledCond = (c) =>
-  typeof c === 'string' ? fill(c) : { ...c, q: fill(c.q), r: fill(c.r), to: fill(c.to) };
-const NODES_FILLED = NODES.map((n) => ({
-  ...n,
-  one: fill(n.one),
-  what: fill(n.what),
-  how: fill(n.how),
-  steps: fill(n.steps),
-  cond: (n.cond || []).map(filledCond),
-  story: fill(n.story),
-}));
-const CH_FILLED = CH.map((c) => ({ ...c, lede: fill(c.lede), story: fill(c.story) }));
-const COST_FILLED = META.costModel.map(fill);
+const NODES_FILLED = deep(NODES);
+const CH_FILLED = deep(CH);
+const COST_FILLED = deep(META.costModel);
+const META_FILLED = deep(META);
+const FLOWS_FILLED = deep(FLOWS);
 
 const HOW = HOW_HTML.replace('{{SIZE_TABLE}}', m.sizeTable).replace(
   '{{TESTS}}',
@@ -72,9 +77,25 @@ const HOW = HOW_HTML.replace('{{SIZE_TABLE}}', m.sizeTable).replace(
     `a fake device.`,
 );
 
-const STATS = META.stats.map((st) =>
+const STATS = META_FILLED.stats.map((st) =>
   st.k === 'Plugin' ? { ...st, v: `${m.totalLabel} lines` } : st,
 );
+
+// Totality check. The property this change exists to guarantee is that no
+// figure the atlas states about the tree is hand-written, and a marker that
+// survives into the output breaks it silently — a map containing
+// "{{LINES:...}}" looks like a rendering bug, not a stale measurement. One
+// check over everything the build emits, rather than a grep someone has to
+// remember to run.
+// Over the FILLED values, which are what reach the output. Checking the raw
+// imports here would fire on markers that were resolved correctly.
+const emitted = JSON.stringify([NODES_FILLED, CH_FILLED, COST_FILLED, HOW, STATS, DECISIONS, GROUPS, FLOWS_FILLED]);
+if (emitted.includes('{{')) {
+  const leftover = emitted.match(/[^"\\]{0,40}\{\{[^"\\]{0,40}/g) || [];
+  throw new Error(
+    `build: unfilled marker(s) reached the output: ${[...new Set(leftover)].join(' | ')}`,
+  );
+}
 
 // ---------- shared helpers ----------
 const Q = (c) => (typeof c === 'string' ? { q: c } : c);
@@ -138,7 +159,7 @@ function buildSystemMd() {
     }
   }
   out.push('## Flows (representative packets)', '', 'Payload shapes are what the design implies, not measured traffic.', '');
-  for (const f of FLOWS) {
+  for (const f of FLOWS_FILLED) {
     out.push(`### ${f.name}`, '', '| # | From → To | Packet | Representative payload |', '|---|---|---|---|');
     f.hops.forEach((h, i) => out.push(`| ${i + 1} | ${h[0]} → ${h[1]} | ${h[2]} | \`${JSON.stringify(h[3]).replace(/\|/g, '\\|')}\` |`));
     out.push('');
@@ -159,7 +180,7 @@ function buildAtlasHtml() {
   const data = [
     `const GROUPS = ${JSON.stringify(GROUPS)};`,
     `const NODES = ${JSON.stringify(NODES_FILLED)};`,
-    `const FLOWS = ${JSON.stringify(FLOWS)};`,
+    `const FLOWS = ${JSON.stringify(FLOWS_FILLED)};`,
     `const CH = ${JSON.stringify(CH_FILLED)};`,
     `const HOW_HTML = ${JSON.stringify(HOW)};`,
     `const DECISIONS_HTML = ${JSON.stringify(decisionsHtml)};`,
